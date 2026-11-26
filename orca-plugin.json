@@ -5,6 +5,10 @@
   "version": "0.5.0",
   "description": "Al abrir Orca, trae los cambios de git de los proyectos que elijas y deja listos en cada uno su agente, sus comandos y lo que configures.",
   "icon": "assets/icon.png",
+  "cover": {
+    "path": "assets/cover.png",
+    "alt": "El gato negro de Monstruito junto al nombre y la frase «Deja tus proyectos listos al abrir Orca»"
+  },
   "engines": {
     "orca": ">=1.4.274"
   },
