@@ -4,6 +4,7 @@
   "name": "Monstruito",
   "version": "0.5.0",
   "description": "Al abrir Orca, trae los cambios de git de los proyectos que elijas y deja listos en cada uno su agente, sus comandos y lo que configures.",
+  "icon": "assets/icon.png",
   "engines": {
     "orca": ">=1.4.259"
   },

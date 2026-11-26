@@ -1,4 +1,8 @@
-# Monstruito
+<p align="center">
+  <img src="assets/logo.png" width="180" alt="Monstruito, un gato negro mirando hacia arriba">
+</p>
+
+<h1 align="center">Monstruito</h1>
 
 Plugin de [Orca](https://github.com/stablyai/orca) que deja tus proyectos listos al abrir Orca. En cada proyecto que marques, y en este orden:
 
