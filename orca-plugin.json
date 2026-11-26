@@ -1,0 +1,294 @@
+{
+  "manifestVersion": 2,
+  "id": "monstruito",
+  "name": "Monstruito",
+  "version": "0.5.0",
+  "description": "Al abrir Orca, trae los cambios de git de los proyectos que elijas y deja listos en cada uno su agente, sus comandos y lo que configures.",
+  "engines": {
+    "orca": ">=1.4.259"
+  },
+  "execution": "trusted-worker",
+  "pluginApi": 1,
+  "main": "src/worker.ts",
+  "contributes": {
+    "panels": [
+      {
+        "id": "monstruito",
+        "title": "Monstruito",
+        "icon": "rocket",
+        "entry": "src/panel.tsx",
+        "ui": "components"
+      }
+    ],
+    "commands": [
+      {
+        "id": "monstruito.run",
+        "title": "Monstruito: ejecutar ahora"
+      },
+      {
+        "id": "monstruito.check",
+        "title": "Monstruito: revisar si hay commits nuevos"
+      },
+      {
+        "id": "monstruito.stop",
+        "title": "Monstruito: detener lo que esté en marcha"
+      }
+    ],
+    "statusBarItems": [
+      {
+        "id": "status",
+        "text": "Monstruito",
+        "icon": "rocket",
+        "tooltip": "Monstruito: pulsa para ejecutar el arranque ahora",
+        "command": "monstruito.run"
+      }
+    ],
+    "events": [
+      {
+        "on": "workspace.created"
+      },
+      {
+        "on": "workspace.removed"
+      }
+    ],
+    "settings": [
+      {
+        "key": "runOnStartup",
+        "title": "Ejecutar al abrir Orca",
+        "description": "Si está apagado, solo se ejecuta con el botón del panel o de la barra de estado.",
+        "type": "boolean",
+        "default": true
+      },
+      {
+        "key": "startupDelaySeconds",
+        "title": "Espera al abrir Orca (segundos)",
+        "description": "Tiempo que deja a Orca para terminar de cargar antes de empezar.",
+        "type": "integer",
+        "default": 4,
+        "minimum": 0,
+        "maximum": 300
+      },
+      {
+        "key": "concurrency",
+        "title": "Proyectos a la vez",
+        "type": "integer",
+        "default": 4,
+        "minimum": 1,
+        "maximum": 16
+      },
+      {
+        "key": "notifyOnFinish",
+        "title": "Avisar al terminar",
+        "description": "Notificación de escritorio con el resumen, y cuando la revisión periódica encuentre commits nuevos.",
+        "type": "boolean",
+        "default": true
+      },
+      {
+        "key": "recheckMinutes",
+        "title": "Revisar commits nuevos cada (minutos)",
+        "description": "Con Orca abierto, descarga cada tantos minutos y marca qué proyectos tienen commits por traer. 0 = nunca.",
+        "type": "integer",
+        "default": 0,
+        "minimum": 0,
+        "maximum": 1440
+      },
+      {
+        "key": "gitMode",
+        "title": "Git",
+        "type": "string",
+        "enum": [
+          "pull",
+          "fetch",
+          "none"
+        ],
+        "enumLabels": [
+          "Descargar y avanzar la rama (solo avance rápido)",
+          "Solo descargar, sin mover la rama",
+          "No tocar git"
+        ],
+        "default": "pull"
+      },
+      {
+        "key": "skipIfDirty",
+        "title": "Saltar proyectos con cambios sin commitear",
+        "description": "Si hay archivos versionados modificados, no se trae nada en ese proyecto.",
+        "type": "boolean",
+        "default": false
+      },
+      {
+        "key": "fetchAll",
+        "title": "Descargar todas las ramas y limpiar las borradas",
+        "description": "git fetch --all --prune en lugar de solo la remota de la rama actual.",
+        "type": "boolean",
+        "default": false
+      },
+      {
+        "key": "updateSubmodules",
+        "title": "Actualizar submódulos",
+        "description": "git submodule update --init --recursive después de avanzar.",
+        "type": "boolean",
+        "default": false
+      },
+      {
+        "key": "fetchOtherWorktrees",
+        "title": "Informar de los demás worktrees",
+        "description": "Cuántos commits va por detrás cada worktree de Orca del proyecto. No los mueve.",
+        "type": "boolean",
+        "default": false
+      },
+      {
+        "key": "agent",
+        "title": "Agente",
+        "type": "string",
+        "enum": [
+          "claude",
+          "codex",
+          "copilot",
+          "cursor",
+          "opencode",
+          "kimi",
+          "droid",
+          "grok"
+        ],
+        "enumLabels": [
+          "Claude",
+          "Codex",
+          "GitHub Copilot",
+          "Cursor",
+          "OpenCode",
+          "Kimi",
+          "Droid",
+          "Grok"
+        ],
+        "default": "claude"
+      },
+      {
+        "key": "model",
+        "title": "Modelo del agente",
+        "description": "Vacío = el de su propia configuración. Para Claude: opus, sonnet, haiku o un id como claude-opus-5-5. Copilot, Kimi y Droid usan siempre el suyo. Mejor elegirlo desde el panel, que ofrece la lista.",
+        "type": "string",
+        "maxLength": 200,
+        "placeholder": "opus",
+        "default": ""
+      },
+      {
+        "key": "effort",
+        "title": "Razonamiento del modelo",
+        "description": "Solo se aplica si eliges un modelo.",
+        "type": "string",
+        "enum": [
+          "",
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "enumLabels": [
+          "El del agente",
+          "Bajo",
+          "Medio",
+          "Alto",
+          "Muy alto",
+          "Máximo"
+        ],
+        "default": ""
+      },
+      {
+        "key": "mode",
+        "title": "Qué hace el agente",
+        "type": "string",
+        "enum": [
+          "wait",
+          "summarize",
+          "prompt",
+          "resume",
+          "none"
+        ],
+        "enumLabels": [
+          "Abrirse y esperar",
+          "Resumir los commits nuevos",
+          "Enviar mi prompt siempre",
+          "Retomar la última sesión",
+          "No abrir agente"
+        ],
+        "default": "wait"
+      },
+      {
+        "key": "onlyWithCommits",
+        "title": "Abrir el agente solo si hay commits nuevos",
+        "type": "boolean",
+        "default": false
+      },
+      {
+        "key": "prompt",
+        "title": "Prompt de arranque",
+        "description": "Para \"Resumir\" (sustituye al resumen por defecto) y \"Enviar mi prompt\". Variables: {proyecto}, {rama}, {remota}, {n_commits}, {commits}.",
+        "type": "string",
+        "multiline": true,
+        "maxLength": 4000,
+        "placeholder": "Vacío = el resumen por defecto",
+        "default": ""
+      },
+      {
+        "key": "staggerSeconds",
+        "title": "Segundos entre agentes",
+        "description": "Espera entre abrir un agente y el siguiente.",
+        "type": "integer",
+        "default": 0,
+        "minimum": 0,
+        "maximum": 300
+      },
+      {
+        "key": "installDeps",
+        "title": "Instalar dependencias si cambian",
+        "description": "Si al avanzar cambia un lockfile (npm, pnpm, yarn, bun, composer, flutter, bundler, poetry, uv), ejecuta su instalación antes de abrir nada.",
+        "type": "boolean",
+        "default": true
+      },
+      {
+        "key": "installMissing",
+        "title": "Instalar dependencias si faltan",
+        "description": "Si no hay node_modules, vendor, .dart_tool o .venv (un clon nuevo), aunque git no haya cambiado nada.",
+        "type": "boolean",
+        "default": true
+      },
+      {
+        "key": "runCommands",
+        "title": "Ejecutar los comandos de cada proyecto",
+        "description": "Los comandos se añaden en el engranaje de cada proyecto, en el panel.",
+        "type": "boolean",
+        "default": true
+      }
+    ]
+  },
+  "capabilities": [
+    {
+      "kind": "workspace:read"
+    },
+    {
+      "kind": "workspace:write"
+    },
+    {
+      "kind": "agent:read"
+    },
+    {
+      "kind": "agent:launch"
+    },
+    {
+      "kind": "history:read"
+    },
+    {
+      "kind": "terminal:send"
+    },
+    {
+      "kind": "notifications:show"
+    },
+    {
+      "kind": "storage:own"
+    },
+    {
+      "kind": "settings:own"
+    }
+  ]
+}
