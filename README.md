@@ -21,13 +21,13 @@ Al terminar puede mostrarte un proyecto para empezar a trabajar ahí.
 orca plugin install SergioHyliacom/monstruito
 ```
 
-Monstruito ejecuta código en tu equipo (git, instalaciones, comandos), así que Orca pide aprobar sus permisos: la orden anterior responde con el comando exacto, con `--approve`, para hacerlo. Después, el panel **Monstruito** aparece en la barra lateral (icono de cohete).
+Monstruito ejecuta código en tu equipo (git, instalaciones, comandos), así que Orca pide aprobar sus permisos: la orden anterior responde con el comando exacto, con `--approve`, para hacerlo. Después, el panel **Monstruito** aparece en la barra lateral (icono de gato).
 
-Necesita Orca 1.4.259 o posterior.
+Necesita Orca 1.4.274 o posterior.
 
 ## Uso
 
-En el panel **Monstruito** (icono de cohete):
+En el panel **Monstruito** (icono de gato):
 
 - **Perfil:** elige con qué conjunto de proyectos trabajas (por ejemplo Trabajo o Casa), o crea uno con **+**.
 - **Elegir proyectos:** marca las casillas del árbol. Va por carpetas, de más reciente a más antiguo según tu actividad en Orca; las carpetas se pliegan y se recuerda cuáles tienes abiertas. **Marcar los N** marca una carpeta entera. Lo marcado pasa a una lista aparte, arriba.
@@ -159,3 +159,7 @@ orca plugin logs local.monstruito   # cargado como carpeta de desarrollo
 ```
 
 `orca plugin test` y `orca plugin check` ejecutan el código del plugin en tu equipo, fuera del sandbox de Orca.
+
+## Créditos
+
+- El icono del panel es el gato de [Lucide](https://lucide.dev), con licencia ISC (© Lucide Icons and Contributors).
