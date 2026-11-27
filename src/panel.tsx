@@ -36,12 +36,14 @@ import {
 import { describeWhen, emptyCommand, newCommandId } from './commands'
 import {
   describeAgent,
+  describeAhead,
   describeGit,
   describeHistoryEntry,
   describePlan,
   describeProgress,
   describeStep,
   describeWorktrees,
+  pendingHint,
   visibleCommands
 } from './describe'
 import { DAYS, describeDays } from './profiles'
@@ -165,7 +167,7 @@ const stopNow = () => ask(() => plugin.request('run.stop'))
 const selectProfile = (profileId: string) => ask(() => plugin.request('profile.select', { profileId }))
 
 async function createProfile(current: PanelState): Promise<void> {
-  const name = `Perfil ${current.profiles.length + 1}`
+  const name = `Profile ${current.profiles.length + 1}`
   if (await ask(() => plugin.request('profile.create', { name }))) {
     // Directo a sus ajustes, para ponerle nombre y días.
     set(settingsScope, 'profile')
@@ -299,7 +301,7 @@ async function exportConfig(): Promise<void> {
   try {
     const { fileName, text } = await plugin.request('config.export')
     const saved = await host.call('files.saveAs', { suggestedName: fileName, mimeType: 'application/json', data: text })
-    set(exportNote, saved.status === 'saved' ? `Guardado como ${fileName}.` : null)
+    set(exportNote, saved.status === 'saved' ? `Saved as ${fileName}.` : null)
   } catch (error) {
     set(failure, errorText(error))
   }
@@ -330,11 +332,11 @@ export function setup(ctx: PanelContext): void {
 // ——— Campos de ajustes ———
 
 function choiceLabel(field: FieldDef, value: unknown, agent = 'claude'): string {
-  if (field.kind === 'toggle') return value ? 'sí' : 'no'
+  if (field.kind === 'toggle') return value ? 'yes' : 'no'
   if (field.kind === 'choice') return field.options.find((option) => option.value === value)?.label ?? String(value)
   if (field.kind === 'number') return numberLabel(field, Number(value))
   if (field.kind === 'model') return modelLabel(agent, String(value ?? ''))
-  return String(value ?? '') || 'vacío'
+  return String(value ?? '') || 'empty'
 }
 
 /** Un Select no distingue bien la opción vacía: '' viaja como EMPTY. */
@@ -367,7 +369,7 @@ function ModelPicker({
   if (!support) {
     return (
       <Text muted size="sm">
-        {`${agentLabel(agent)} usa el modelo de su propia configuración: aquí no se puede elegir.`}
+        {`${agentLabel(agent)} uses the model from its own configuration: it can't be chosen here.`}
       </Text>
     )
   }
@@ -377,16 +379,16 @@ function ModelPicker({
   const setWriting = (on: boolean) => update(customModel, (all) => ({ ...all, [scope]: on }))
   const options = [
     ...(inheritLabel ? [{ value: INHERIT, label: inheritLabel }] : []),
-    { value: EMPTY, label: 'El de su propia configuración' },
+    { value: EMPTY, label: 'The one from its own configuration' },
     ...support.models,
-    { value: CUSTOM, label: 'Otro (escribirlo)' }
+    { value: CUSTOM, label: 'Other (type it)' }
   ]
   const draftKey = `${scope}:model`
   const shown = read(textDrafts)[draftKey] ?? (typed ? value : '')
   return (
     <Stack gap="xs">
       <Select
-        label="Modelo"
+        label="Model"
         value={value === undefined && !writing ? INHERIT : writing ? CUSTOM : encode(value ?? '')}
         options={options}
         onChange={(next) => {
@@ -400,7 +402,7 @@ function ModelPicker({
         <Row gap="xs" align="end">
           <Box grow>
             <Input
-              label="Id del modelo"
+              label="Model id"
               value={shown}
               placeholder={support.placeholder}
               maxLength={200}
@@ -420,7 +422,7 @@ function ModelPicker({
                 onSave(shown.trim())
               }}
             >
-              Guardar modelo
+              Save model
             </Button>
           )}
         </Row>
@@ -456,7 +458,7 @@ function SettingField({
   onSave: (value: unknown) => void
 }) {
   const inheritable = inherited !== undefined
-  const inherit = { value: INHERIT, label: `Como en todos los perfiles (${choiceLabel(field, inherited, agent)})` }
+  const inherit = { value: INHERIT, label: `As in all profiles (${choiceLabel(field, inherited, agent)})` }
   const own = value !== undefined
   if (field.key === 'effort' && !modelSupport(agent)?.effort) return null
   switch (field.kind) {
@@ -475,7 +477,7 @@ function SettingField({
         <Select
           label={field.label}
           value={own ? (value ? 'on' : 'off') : INHERIT}
-          options={[inherit, { value: 'on', label: 'Sí' }, { value: 'off', label: 'No' }]}
+          options={[inherit, { value: 'on', label: 'Yes' }, { value: 'off', label: 'No' }]}
           onChange={(next) => onSave(next === INHERIT ? undefined : next === 'on')}
         />
       ) : (
@@ -523,7 +525,7 @@ function SettingField({
       const shown = draft ?? saved
       const dirty = draft !== undefined && draft !== saved
       const placeholder = inheritable
-        ? `Vacío = como en todos los perfiles${inherited ? `: ${String(inherited).slice(0, 60)}` : ''}`
+        ? `Empty = as in all profiles${inherited ? `: ${String(inherited).slice(0, 60)}` : ''}`
         : field.placeholder
       const onChange = (next: string) => update(textDrafts, (drafts) => ({ ...drafts, [draftKey]: next }))
       return (
@@ -545,7 +547,7 @@ function SettingField({
               disabled={!dirty}
               onPress={() => onSave(inheritable && shown.trim() === '' ? undefined : shown)}
             >
-              {`Guardar ${field.label.toLowerCase()}`}
+              {`Save ${field.label.toLowerCase()}`}
             </Button>
           </Row>
         </Stack>
@@ -587,43 +589,43 @@ function SettingsTabs({
 // ——— Comandos de un proyecto ———
 
 const KIND_OPTIONS = [
-  { value: 'tab', label: 'En su pestaña (servidores, watchers…)' },
-  { value: 'prepare', label: 'Preparación: en segundo plano, y se espera' }
+  { value: 'tab', label: 'In its own tab (servers, watchers…)' },
+  { value: 'prepare', label: 'Setup: in the background, and waited for' }
 ]
 
 const WHEN_OPTIONS = [
-  { value: 'always', label: 'Siempre' },
-  { value: 'commits', label: 'Solo si entran commits' },
-  { value: 'files', label: 'Solo si cambian ciertos archivos' }
+  { value: 'always', label: 'Always' },
+  { value: 'commits', label: 'Only if commits come in' },
+  { value: 'files', label: 'Only if certain files change' }
 ]
 
 function CommandRow({ command, index, total }: { command: CommandDef; index: number; total: number }) {
-  const kind = command.kind === 'tab' ? 'Pestaña' : 'Preparación'
+  const kind = command.kind === 'tab' ? 'Tab' : 'Setup'
   const filesText = read(filesDrafts)[command.id] ?? command.files.join(', ')
   return (
     <Collapsible
-      title={command.command || 'Comando nuevo'}
-      description={`${kind} · ${describeWhen(command)}${command.enabled ? '' : ' · desactivado'}`}
+      title={command.command || 'New command'}
+      description={`${kind} · ${describeWhen(command)}${command.enabled ? '' : ' · disabled'}`}
       open={read(openCommand) === command.id}
       onChange={(open) => set(openCommand, open ? command.id : null)}
     >
       <Stack gap="xs">
         <Input
-          label="Comando"
+          label="Command"
           value={command.command}
           placeholder="npm run dev"
           maxLength={500}
           onChange={(value) => patchCommand(command.id, { command: value })}
         />
         <Input
-          label="Nombre (opcional)"
+          label="Name (optional)"
           value={command.name}
-          placeholder="Para el título de su pestaña"
+          placeholder="For its tab title"
           maxLength={40}
           onChange={(value) => patchCommand(command.id, { name: value })}
         />
         <Select
-          label="Tipo"
+          label="Type"
           value={command.kind}
           options={KIND_OPTIONS}
           onChange={(value) =>
@@ -631,7 +633,7 @@ function CommandRow({ command, index, total }: { command: CommandDef; index: num
           }
         />
         <Select
-          label="Cuándo"
+          label="When"
           value={command.when}
           options={WHEN_OPTIONS}
           onChange={(value) => patchCommand(command.id, { when: value === 'commits' || value === 'files' ? value : 'always' })}
@@ -639,7 +641,7 @@ function CommandRow({ command, index, total }: { command: CommandDef; index: num
         {command.when === 'files' ? (
           <Stack gap="xs">
             <Input
-              label="Archivos"
+              label="Files"
               value={filesText}
               placeholder="database/migrations/, package.json"
               onChange={(value) => {
@@ -653,37 +655,37 @@ function CommandRow({ command, index, total }: { command: CommandDef; index: num
               }}
             />
             <Text muted size="xs">
-              Separados por comas, desde la raíz del proyecto. «carpeta/» es todo lo de dentro; valen * y **.
+              Comma-separated, from the project root. “folder/” is everything inside it; * and ** work.
             </Text>
           </Stack>
         ) : null}
         {command.kind === 'tab' ? (
           <Stack gap="xs">
             <Checkbox
-              label="Reiniciar si ya está abierto"
-              description="Cierra su pestaña y la abre otra vez. Solo puede con las que abrió Monstruito."
+              label="Restart if already open"
+              description="Closes its tab and opens it again. Only works with the tabs Monstruito opened."
               checked={command.restart}
               onChange={(checked) => patchCommand(command.id, { restart: checked })}
             />
             <Checkbox
-              label="Abrir la web cuando esté lista"
-              description="Cuando escuche en un puerto nuevo, abre su dirección en el navegador de Orca, por detrás."
+              label="Open the web page when it's ready"
+              description="When it listens on a new port, opens its address in Orca's browser, in the background."
               checked={command.openUrl}
               onChange={(checked) => patchCommand(command.id, { openUrl: checked })}
             />
           </Stack>
         ) : null}
         <Checkbox
-          label="Activo"
+          label="Enabled"
           checked={command.enabled}
           onChange={(checked) => patchCommand(command.id, { enabled: checked })}
         />
         <Row gap="xs" wrap>
           <Button size="sm" variant="ghost" disabled={index === 0} onPress={() => moveCommand(command.id, -1)}>
-            Subir
+            Move up
           </Button>
           <Button size="sm" variant="ghost" disabled={index === total - 1} onPress={() => moveCommand(command.id, 1)}>
-            Bajar
+            Move down
           </Button>
           <Button
             size="sm"
@@ -692,7 +694,7 @@ function CommandRow({ command, index, total }: { command: CommandDef; index: num
             icon="delete"
             onPress={() => changeCommands((commands) => commands.filter((item) => item.id !== command.id))}
           >
-            Quitar
+            Remove
           </Button>
         </Row>
       </Stack>
@@ -711,25 +713,25 @@ function CommandsEditor({ projectId }: { projectId: string }) {
     <Stack gap="sm">
       <Separator />
       <Text weight="semibold" size="sm">
-        {`Comandos del proyecto (${list.length})`}
+        {`Project commands (${list.length})`}
       </Text>
       <Text muted size="xs">
-        Los de preparación se ejecutan antes de abrir el agente y se esperan; los de pestaña se abren al final.
-        Valen en todos los perfiles.
+        Setup commands run before the agent opens, and are waited for; tab commands open at the end.
+        They apply in all profiles.
       </Text>
       {list.map((command, index) => (
         <CommandRow key={command.id} command={command} index={index} total={list.length} />
       ))}
       <Row>
         <Button size="sm" variant="outline" icon="add" onPress={() => addCommand()}>
-          Añadir comando
+          Add command
         </Button>
       </Row>
       {proposed === undefined ? (
-        <Spinner label="Buscando comandos que proponer" />
+        <Spinner label="Looking for commands to suggest" />
       ) : free.length > 0 ? (
         <Stack gap="xs">
-          <Text muted size="xs">{`Sugerencias (${sources}):`}</Text>
+          <Text muted size="xs">{`Suggestions (${sources}):`}</Text>
           <Row gap="xs" wrap>
             {free.map((suggestion) => (
               <Button
@@ -737,7 +739,7 @@ function CommandsEditor({ projectId }: { projectId: string }) {
                 size="sm"
                 variant="ghost"
                 icon="add"
-                tooltip={suggestion.kind === 'tab' ? 'En su pestaña' : 'Preparación'}
+                tooltip={suggestion.kind === 'tab' ? 'In its own tab' : 'Setup'}
                 onPress={() => addCommand(suggestion)}
               >
                 {suggestion.command}
@@ -757,18 +759,18 @@ function ProfileCard({ current, profile }: { current: PanelState; profile: Profi
   const shownName = nameDraft ?? profile.name
   const marked = sortByRecency(current.projects.filter((project) => project.selected))
   const openOptions = [
-    { value: 'none', label: 'Nada' },
-    { value: OPEN_RECENT, label: 'El marcado usado más recientemente' },
+    { value: 'none', label: 'Nothing' },
+    { value: OPEN_RECENT, label: 'The most recently used selected project' },
     ...marked.map((project) => ({ value: project.id, label: project.name }))
   ]
   const days = describeDays(profile.days)
   const deleting = read(confirmDelete) === profile.id
   return (
-    <Card title={`Perfil «${profile.name}»`} description="Sus proyectos marcados, cuándo se usa y lo que cambie de los ajustes.">
+    <Card title={`Profile “${profile.name}”`} description="Its selected projects, when it is used and the settings it changes.">
       <Stack gap="sm">
         <Row gap="xs" align="end">
           <Box grow>
-            <Input label="Nombre del perfil" value={shownName} maxLength={60} onChange={(value) => set(profileName, value)} />
+            <Input label="Profile name" value={shownName} maxLength={60} onChange={(value) => set(profileName, value)} />
           </Box>
           <Button
             size="sm"
@@ -778,11 +780,11 @@ function ProfileCard({ current, profile }: { current: PanelState; profile: Profi
               if (await updateProfile(profile.id, { name: shownName })) set(profileName, null)
             }}
           >
-            Guardar nombre
+            Save name
           </Button>
         </Row>
         <Text weight="medium" size="sm">
-          Usarlo al abrir Orca estos días
+          Use it when Orca opens on these days
         </Text>
         <Row gap="sm" wrap>
           {DAYS.map((day) => (
@@ -800,11 +802,11 @@ function ProfileCard({ current, profile }: { current: PanelState; profile: Profi
         </Row>
         <Text muted size="xs">
           {days
-            ? `Al abrir Orca ${days} se usa este perfil. Los demás días, el que esté elegido arriba.`
-            : 'Sin días: se usa cuando lo eliges arriba. Un día solo puede ser de un perfil.'}
+            ? `This profile is used when Orca opens: ${days}. On other days, the one chosen above.`
+            : 'No days: it is used when you choose it above. A day can belong to only one profile.'}
         </Text>
         <Select
-          label="Al terminar el arranque, mostrar"
+          label="When startup finishes, show"
           value={profile.openAtEnd || 'none'}
           options={openOptions}
           onChange={(value) => void updateProfile(profile.id, { openAtEnd: value === 'none' ? '' : value })}
@@ -814,9 +816,9 @@ function ProfileCard({ current, profile }: { current: PanelState; profile: Profi
             size="sm"
             variant="outline"
             icon="copy"
-            onPress={() => void ask(() => plugin.request('profile.create', { name: `${profile.name} (copia)`, copyFrom: profile.id }))}
+            onPress={() => void ask(() => plugin.request('profile.create', { name: `${profile.name} (copy)`, copyFrom: profile.id }))}
           >
-            Duplicar
+            Duplicate
           </Button>
           <Button
             size="sm"
@@ -830,7 +832,7 @@ function ProfileCard({ current, profile }: { current: PanelState; profile: Profi
               await ask(() => plugin.request('profile.delete', { profileId: profile.id }))
             }}
           >
-            {deleting ? `Pulsa otra vez para eliminar «${profile.name}»` : 'Eliminar perfil'}
+            {deleting ? `Click again to delete “${profile.name}”` : 'Delete profile'}
           </Button>
         </Row>
       </Stack>
@@ -842,11 +844,11 @@ function TransferView({ current }: { current: PanelState }) {
   const report = read(importResult)
   const note = read(exportNote)
   return (
-    <Collapsible title="Exportar o importar" description="Para llevar perfiles y ajustes a otro equipo, o guardar una copia.">
+    <Collapsible title="Export or import" description="To take profiles and settings to another computer, or keep a backup.">
       <Stack gap="sm">
         <Row gap="xs" align="center" wrap>
           <Button size="sm" variant="outline" icon="download" onPress={exportConfig}>
-            Exportar a un archivo
+            Export to a file
           </Button>
           {note ? (
             <Text muted size="xs">
@@ -855,30 +857,30 @@ function TransferView({ current }: { current: PanelState }) {
           ) : null}
         </Row>
         <Textarea
-          label="Importar"
+          label="Import"
           value={read(importText)}
-          placeholder="Pega aquí el contenido del archivo exportado"
+          placeholder="Paste the contents of the exported file here"
           rows={4}
           onChange={(value) => set(importText, value)}
         />
         <Text muted size="xs">
-          Sustituye tus perfiles, los ajustes de todos los perfiles y los de cada proyecto. Los proyectos se buscan
-          por ruta y, si no, por nombre. Antes se guarda una copia para poder deshacerlo.
+          Replaces your profiles, the settings for all profiles and each project's settings. Projects are matched
+          by path and, failing that, by name. A backup is saved first so you can undo it.
         </Text>
         <Row gap="xs" wrap>
           <Button size="sm" icon="upload" disabled={!read(importText).trim()} onPress={importConfig}>
-            Importar
+            Import
           </Button>
           {current.canUndoImport ? (
             <Button size="sm" variant="ghost" onPress={undoImport}>
-              Deshacer la última importación
+              Undo the last import
             </Button>
           ) : null}
         </Row>
         {report ? (
-          <Callout tone={report.missing.length > 0 ? 'warning' : 'success'} title="Importado">
-            {`${report.profiles} perfiles, ${report.matched} proyectos encontrados` +
-              (report.missing.length > 0 ? `. No están en este equipo: ${report.missing.join(', ')}.` : '.')}
+          <Callout tone={report.missing.length > 0 ? 'warning' : 'success'} title="Imported">
+            {`${report.profiles} profiles, ${report.matched} projects found` +
+              (report.missing.length > 0 ? `. Not on this computer: ${report.missing.join(', ')}.` : '.')}
           </Callout>
         ) : null}
       </Stack>
@@ -904,26 +906,26 @@ function SettingsView({ current }: { current: PanelState }) {
   return (
     <Stack gap="sm">
       <Row justify="between" align="center">
-        <Heading level={2}>Ajustes</Heading>
-        <IconButton icon="close" label="Cerrar ajustes" variant="ghost" size="sm" onPress={() => set(settingsOpen, false)} />
+        <Heading level={2}>Settings</Heading>
+        <IconButton icon="close" label="Close settings" variant="ghost" size="sm" onPress={() => set(settingsOpen, false)} />
       </Row>
       <Select
-        label="Qué ajustes editas"
+        label="Which settings you are editing"
         value={scope}
         options={[
-          { value: 'all', label: 'Los de todos los perfiles' },
-          { value: 'profile', label: `Solo los del perfil «${profile.name}»` }
+          { value: 'all', label: 'The ones for all profiles' },
+          { value: 'profile', label: `Only the ones for profile “${profile.name}”` }
         ]}
         onChange={(value) => set(settingsScope, value === 'profile' ? 'profile' : 'all')}
       />
       {scope === 'profile' ? <ProfileCard current={current} profile={profile} /> : null}
       <Text muted size="xs">
         {scope === 'profile'
-          ? 'Lo que dejes «Como en todos los perfiles» sigue los ajustes de todos. Cada proyecto puede cambiarlo también con su engranaje.'
-          : 'Valen para todos los perfiles, salvo lo que cambie cada perfil o cada proyecto con su engranaje.'}
+          ? 'Whatever you leave as “As in all profiles” follows the settings for all profiles. Each project can also change it with its gear.'
+          : 'They apply to all profiles, except what each profile, or each project with its gear, changes.'}
       </Text>
       <SettingsTabs
-        label="Grupos de ajustes"
+        label="Settings groups"
         groups={GLOBAL_GROUPS}
         tab={globalTab}
         renderField={(field) =>
@@ -953,10 +955,10 @@ function SettingsView({ current }: { current: PanelState }) {
           )
         }
         extra={{
-          Comandos: (
+          Commands: (
             <Text muted size="xs">
-              Los comandos (npm run dev, migraciones, docker…) son de cada proyecto: se añaden en su engranaje, en la
-              pestaña Comandos.
+              Commands (npm run dev, migrations, docker…) belong to each project: add them in its gear, in the
+              Commands tab.
             </Text>
           )
         }}
@@ -977,7 +979,7 @@ function OverrideField({ field, draft, global }: { field: FieldDef; draft: Proje
   // El modelo del perfil solo se hereda si el proyecto usa el mismo agente.
   const otherAgent = draft.agent !== undefined && draft.agent !== global.agent
   const inherited = (key === 'model' || key === 'effort') && otherAgent ? '' : global[field.key]
-  const inherit = { value: OWN_INHERIT, label: `Como el perfil (${choiceLabel(field, inherited, agent)})` }
+  const inherit = { value: OWN_INHERIT, label: `As in the profile (${choiceLabel(field, inherited, agent)})` }
   if (key === 'effort' && !modelSupport(agent)?.effort) return null
   switch (field.kind) {
     case 'model':
@@ -996,7 +998,7 @@ function OverrideField({ field, draft, global }: { field: FieldDef; draft: Proje
         <Select
           label={field.label}
           value={current === undefined ? OWN_INHERIT : current ? 'on' : 'off'}
-          options={[inherit, { value: 'on', label: 'Sí' }, { value: 'off', label: 'No' }]}
+          options={[inherit, { value: 'on', label: 'Yes' }, { value: 'off', label: 'No' }]}
           onChange={(next) => changeDraft(key, next === OWN_INHERIT ? undefined : next === 'on')}
         />
       )
@@ -1010,7 +1012,7 @@ function OverrideField({ field, draft, global }: { field: FieldDef; draft: Proje
         />
       )
     case 'text': {
-      const placeholder = `Vacío = como el perfil${global[field.key] ? `: ${String(global[field.key]).slice(0, 60)}` : ''}`
+      const placeholder = `Empty = as in the profile${global[field.key] ? `: ${String(global[field.key]).slice(0, 60)}` : ''}`
       const onChange = (next: string) => changeDraft(key, next.trim() === '' ? undefined : next)
       return field.multiline ? (
         <Textarea label={field.label} value={String(current ?? '')} placeholder={placeholder} rows={3} maxLength={field.maxLength} onChange={onChange} />
@@ -1027,25 +1029,25 @@ function ProjectEditor({ project, global }: { project: ProjectRow; global: Globa
   const current = read(editing)
   if (!current) return null
   return (
-    <Card title={`Ajustes de ${project.name}`} description="En todos los perfiles. Lo que dejes «Como el perfil» sigue los del perfil.">
+    <Card title={`Settings for ${project.name}`} description="In all profiles. Whatever you leave as “As in the profile” follows the profile.">
       <Stack gap="sm">
         <SettingsTabs
-          label="Grupos de ajustes del proyecto"
+          label="Project settings groups"
           groups={PROJECT_GROUPS}
           tab={projectTab}
           renderField={(field) => <OverrideField key={field.key} field={field} draft={current.draft} global={global} />}
-          extra={{ Comandos: <CommandsEditor projectId={project.id} /> }}
+          extra={{ Commands: <CommandsEditor projectId={project.id} /> }}
         />
         <Row gap="xs" wrap>
           <Button size="sm" onPress={() => void saveProject(project.id, current.draft, current.commands)}>
-            Guardar
+            Save
           </Button>
           <Button size="sm" variant="ghost" onPress={() => set(editing, null)}>
-            Cancelar
+            Cancel
           </Button>
           {project.customized ? (
             <Button size="sm" variant="ghost" tone="danger" onPress={() => void saveOverride(project.id, null)}>
-              Quitar ajustes propios
+              Remove custom settings
             </Button>
           ) : null}
         </Row>
@@ -1079,8 +1081,8 @@ function ProjectItem({
   folder?: string
   view: TreeView
 }) {
-  const used = project.lastUsedAt === null ? 'Sin uso en Orca' : `Usado ${usedAgo(project.lastUsedAt, view.now)}`
-  const where = here ? 'Esta carpeta' : folder
+  const used = project.lastUsedAt === null ? 'Not used in Orca' : `Used ${usedAgo(project.lastUsedAt, view.now)}`
+  const where = here ? 'This folder' : folder
   const isEditing = read(editing)?.projectId === project.id
   return (
     <Stack gap="xs">
@@ -1093,13 +1095,13 @@ function ProjectItem({
             onChange={(checked) => void toggle(project.id, checked)}
           />
         </Box>
-        {project.customized ? <Badge tone="accent">propio</Badge> : null}
+        {project.customized ? <Badge tone="accent">custom</Badge> : null}
         {view.commands[project.id]?.length ? (
           <Badge tone="neutral">{`${view.commands[project.id].length} cmd`}</Badge>
         ) : null}
         <IconButton
           icon="settings"
-          label={`Ajustes de ${project.name}`}
+          label={`Settings for ${project.name}`}
           variant="ghost"
           size="sm"
           tone={isEditing ? 'accent' : 'neutral'}
@@ -1112,8 +1114,8 @@ function ProjectItem({
 }
 
 function folderSummary(folder: FolderNode, now: number): string {
-  const parts = [`${folder.total} ${folder.total === 1 ? 'proyecto' : 'proyectos'}`]
-  if (folder.lastUsedAt !== null) parts.push(`usado ${usedAgo(folder.lastUsedAt, now)}`)
+  const parts = [`${folder.total} ${folder.total === 1 ? 'project' : 'projects'}`]
+  if (folder.lastUsedAt !== null) parts.push(`used ${usedAgo(folder.lastUsedAt, now)}`)
   return parts.join(' · ')
 }
 
@@ -1137,7 +1139,7 @@ function NodeView({ node, view }: { node: TreeNode; view: TreeView }) {
       <Box paddingX="sm" gap="xs">
         <Row>
           <Button size="sm" variant="ghost" icon="check" onPress={() => void markMany(projectIdsIn(node), true)}>
-            {`Marcar los ${node.total}`}
+            {`Select all ${node.total}`}
           </Button>
         </Row>
         {node.projects.map((project) => (
@@ -1175,36 +1177,39 @@ function ProjectTreeView({ current }: { current: PanelState }) {
       set(expanded, [...next])
     }
   }
+  const unselected = current.projects.length - allSelected.length
   return (
     <Stack gap="md">
       {allSelected.length > 0 ? (
-        <Stack gap="xs">
-          <Text weight="semibold">{`Marcados · ${allSelected.length}`}</Text>
+        // Un recuadro con el borde de acento: lo que se va a preparar no se confunde con el árbol.
+        <Box border="accent" radius="md" padding="sm" gap="xs">
+          <Text weight="semibold">{`Selected · ${allSelected.length}`}</Text>
           {marked.length === 0 ? (
             <Text muted size="sm">
-              Ningún proyecto marcado coincide.
+              No selected project matches.
             </Text>
           ) : (
             marked.map((project) => (
               <ProjectItem key={project.id} project={project} folder={folderOf(project.path, base)} view={view} />
             ))
           )}
-        </Stack>
+        </Box>
       ) : (
         <Text muted size="sm">
-          Marca los proyectos que quieres preparar al abrir Orca: pasarán a una lista aparte, arriba.
+          Select the projects you want ready when Orca opens: they move to a separate list, at the top.
         </Text>
       )}
+      {allSelected.length > 0 ? <Separator /> : null}
       <Stack gap="xs">
-        {allSelected.length > 0 ? <Text weight="semibold">Sin marcar</Text> : null}
+        {allSelected.length > 0 ? <Text weight="semibold">{`Not selected · ${unselected}`}</Text> : null}
         {tree.base ? (
           <Text muted size="xs">
-            {`En ${tree.base}, de más reciente a más antiguo`}
+            {`In ${tree.base}, most recent first`}
           </Text>
         ) : null}
         {nodes.length === 0 ? (
           <Text muted size="sm">
-            {tree.nodes.length === 0 ? 'Están todos marcados.' : 'Ningún proyecto coincide.'}
+            {tree.nodes.length === 0 ? 'All projects are selected.' : 'No project matches.'}
           </Text>
         ) : (
           nodes.map((node) => <NodeView key={node.key} node={node} view={view} />)
@@ -1217,8 +1222,10 @@ function ProjectTreeView({ current }: { current: PanelState }) {
 // ——— Resultados, avance e historial ———
 
 function ResultRow({ result }: { result: ProjectResult }) {
+  const ahead = describeAhead(result.git)
   const badges = [
     describeGit(result.git),
+    ...(ahead ? [ahead] : []),
     describeAgent(result.agent),
     ...result.deps.map(describeStep),
     ...visibleCommands(result)
@@ -1228,7 +1235,7 @@ function ResultRow({ result }: { result: ProjectResult }) {
     ...badges.map((badge) => badge.detail),
     describeWorktrees(result.worktrees),
     skipped.length > 0
-      ? `No tocaban: ${skipped.map((command) => `${command.name} (${command.message ?? ''})`).join(', ')}`
+      ? `Skipped: ${skipped.map((command) => `${command.name} (${command.message ?? ''})`).join(', ')}`
       : undefined
   ].filter(Boolean)
   return (
@@ -1255,24 +1262,24 @@ function RunResults({ run }: { run: RunRecord }) {
     <Stack gap="sm">
       {run.results.length === 0 ? (
         <Text muted size="sm">
-          No había proyectos marcados.
+          No projects were selected.
         </Text>
       ) : (
         run.results.map((result) => <ResultRow key={result.projectId} result={result} />)
       )}
       {run.missing.length > 0 ? (
         <Text tone="warning" size="sm">
-          {run.missing.length} proyecto(s) marcado(s) ya no están en Orca.
+          {run.missing.length === 1 ? '1 selected project is' : `${run.missing.length} selected projects are`} no longer in Orca.
         </Text>
       ) : null}
       {run.stopped ? (
         <Text tone="warning" size="sm">
-          Se detuvo antes de terminar.
+          Stopped before finishing.
         </Text>
       ) : null}
       {run.opened ? (
         <Text muted size="sm">
-          {`Al terminar se mostró ${run.opened}.`}
+          {`Showed ${run.opened} at the end.`}
         </Text>
       ) : null}
     </Stack>
@@ -1281,10 +1288,10 @@ function RunResults({ run }: { run: RunRecord }) {
 
 function LastRun({ run }: { run: RunRecord }) {
   return (
-    <Card title="Última ejecución">
+    <Card title="Last run">
       <Stack gap="sm">
         <Text muted size="sm">
-          {run.trigger === 'startup' ? 'Al abrir Orca' : 'A mano'}
+          {run.trigger === 'startup' ? 'When Orca opened' : 'Manual'}
           {run.profile ? ` · ${run.profile}` : ''}, <RelativeTime at={run.finishedAt} />
         </Text>
         <RunResults run={run} />
@@ -1297,7 +1304,7 @@ function HistoryView({ history }: { history: RunRecord[] }) {
   const older = history.slice(1)
   if (older.length === 0) return null
   return (
-    <Collapsible title={`Ejecuciones anteriores (${older.length})`}>
+    <Collapsible title={`Previous runs (${older.length})`}>
       <Stack gap="xs">
         {older.map((run) => {
           const entry = describeHistoryEntry(run)
@@ -1329,15 +1336,15 @@ function ProgressView({ value }: { value: RunProgress }) {
 function PendingView({ pending }: { pending: PendingCheck }) {
   if (pending.projects.length === 0) return null
   return (
-    <Callout tone="accent" title="Commits por traer">
+    <Callout tone="accent" title="Commits not applied">
       <Stack gap="xs">
         {pending.projects.map((project) => (
           <Text key={project.projectId} size="sm">
-            {`${project.name}: ${project.count} en ${project.upstream}`}
+            {`${project.name}: ${project.count} in ${project.upstream}${project.fetchOnly ? ' · fetch only' : ''}`}
           </Text>
         ))}
         <Text muted size="xs">
-          Revisado <RelativeTime at={pending.checkedAt} />. Ejecutar ahora los trae.
+          Checked <RelativeTime at={pending.checkedAt} />. {pendingHint(pending.projects, 'panel')}
         </Text>
       </Stack>
     </Callout>
@@ -1353,7 +1360,7 @@ function ProfileBar({ current }: { current: PanelState }) {
     <Row gap="xs" align="end">
       <Box grow>
         <Select
-          label="Perfil"
+          label="Profile"
           value={current.activeProfileId}
           options={options}
           onChange={(value) => {
@@ -1362,7 +1369,7 @@ function ProfileBar({ current }: { current: PanelState }) {
           }}
         />
       </Box>
-      <IconButton icon="add" label="Nuevo perfil" variant="ghost" onPress={() => void createProfile(current)} />
+      <IconButton icon="add" label="New profile" variant="ghost" onPress={() => void createProfile(current)} />
     </Row>
   )
 }
@@ -1377,11 +1384,11 @@ export default function Panel() {
       <Stack gap="md">
         <Heading>Monstruito</Heading>
         {error ? (
-          <Callout tone="danger" title="No he podido cargar los proyectos">
+          <Callout tone="danger" title="Could not load the projects">
             {error}
           </Callout>
         ) : (
-          <Spinner label="Cargando proyectos" />
+          <Spinner label="Loading projects" />
         )}
       </Stack>
     )
@@ -1398,7 +1405,7 @@ export default function Panel() {
     <Stack gap="md">
       <Row justify="between">
         <Heading>Monstruito</Heading>
-        <Badge tone={selectedCount > 0 ? 'accent' : 'neutral'}>{`${selectedCount} marcados`}</Badge>
+        <Badge tone={selectedCount > 0 ? 'accent' : 'neutral'}>{`${selectedCount} selected`}</Badge>
       </Row>
       <ProfileBar current={current} />
       <Text muted size="sm">
@@ -1407,24 +1414,24 @@ export default function Panel() {
       {error ? <Callout tone="danger">{error}</Callout> : null}
       <Row gap="xs" align="center" wrap>
         <Button icon="play" disabled={busy || selectedCount === 0} onPress={runNow}>
-          Ejecutar ahora
+          Run now
         </Button>
         <Button icon="download" variant="outline" disabled={busy || selectedCount === 0} onPress={checkNow}>
-          Revisar commits
+          Check commits
         </Button>
         {busy ? (
           <Button icon="stop" variant="ghost" tone="danger" disabled={live?.stopping === true} onPress={stopNow}>
-            Detener
+            Stop
           </Button>
         ) : null}
         {!busy && current.openedTerminals > 0 ? (
           <Button
             icon="close"
             variant="ghost"
-            tooltip="Cierra las pestañas de comandos que abrió Monstruito"
+            tooltip="Closes the command tabs Monstruito opened"
             onPress={closeTerminals}
           >
-            {`Cerrar pestañas (${current.openedTerminals})`}
+            {`Close tabs (${current.openedTerminals})`}
           </Button>
         ) : null}
       </Row>
@@ -1437,9 +1444,9 @@ export default function Panel() {
         <Box grow>
           <Input
             type="search"
-            label="Buscar proyecto"
+            label="Search projects"
             labelHidden
-            placeholder="Buscar proyecto"
+            placeholder="Search projects"
             value={read(query)}
             onChange={(value) => {
               set(query, value)
@@ -1448,10 +1455,10 @@ export default function Panel() {
             }}
           />
         </Box>
-        <IconButton icon="refresh" label="Recargar proyectos" variant="ghost" onPress={reload} />
+        <IconButton icon="refresh" label="Reload projects" variant="ghost" onPress={reload} />
         <IconButton
           icon="settings"
-          label="Ajustes"
+          label="Settings"
           variant={read(settingsOpen) ? 'solid' : 'ghost'}
           tone={read(settingsOpen) ? 'accent' : 'neutral'}
           onPress={() => update(settingsOpen, (open) => !open)}

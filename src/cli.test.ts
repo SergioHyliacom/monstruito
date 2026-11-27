@@ -35,7 +35,7 @@ test('si no aparece ningún puerto nuevo, se rinde', async () => {
   const web = { ports: async () => [{ port: 3000 }], open: async () => undefined }
   await assert.rejects(
     waitForWeb(web, 'D:/P/web', new Set([3000]), { sleep: async () => undefined, timeoutMs: 6000, intervalMs: 2000 }),
-    /No escuchó en ningún puerto nuevo en 6 s/
+    /did not listen on any new port within 6 s/
   )
 })
 

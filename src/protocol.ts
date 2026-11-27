@@ -10,6 +10,10 @@ export type ProjectSettings = {
   skipIfDirty: boolean
   fetchAll: boolean
   updateSubmodules: boolean
+  /** Si la rama se ha separado de su remota: rebase encima de ella; si choca, se deshace. */
+  rebaseIfDiverged: boolean
+  /** Contar los commits locales que todavía no están en la remota. */
+  reportAhead: boolean
   fetchOtherWorktrees: boolean
   agent: string
   /** Modelo del agente; vacío = el de su propia configuración. */
@@ -78,13 +82,17 @@ export type GitOutcome =
       count: number
       commits: string[]
       submodules?: { ok: boolean; message?: string }
+      /** Avanzó con rebase: cuántos commits locales se pusieron encima de la remota. */
+      rebased?: number
+      /** Commits locales que no están en la remota (solo si se cuentan y hay alguno). */
+      ahead?: number
     }
-  /** Descargado sin mover la rama: estos commits están por traer. */
-  | { kind: 'fetched'; upstream: string; count: number; commits: string[] }
-  | { kind: 'up-to-date'; upstream: string }
+  /** Descargado sin mover la rama: estos commits están sin aplicar. */
+  | { kind: 'fetched'; upstream: string; count: number; commits: string[]; ahead?: number }
+  | { kind: 'up-to-date'; upstream: string; ahead?: number }
   | { kind: 'no-upstream' }
   | { kind: 'dirty' }
-  | { kind: 'failed'; step: 'fetch' | 'merge' | 'git'; message: string }
+  | { kind: 'failed'; step: 'fetch' | 'merge' | 'rebase' | 'git'; message: string; ahead?: number }
   | { kind: 'skipped' }
   /** Se pulsó Detener antes de acabar. */
   | { kind: 'cancelled' }
@@ -196,7 +204,14 @@ export type ImportReport = {
 /** Lo que encontró la última revisión periódica. */
 export type PendingCheck = {
   checkedAt: number
-  projects: { projectId: string; name: string; upstream: string; count: number }[]
+  projects: {
+    projectId: string
+    name: string
+    upstream: string
+    count: number
+    /** Su modo de git es solo descargar: Ejecutar ahora no los aplica. */
+    fetchOnly?: boolean
+  }[]
   failed: number
 }
 

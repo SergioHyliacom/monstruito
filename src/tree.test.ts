@@ -122,11 +122,11 @@ test('la carpeta de un proyecto sin la raíz común', () => {
 })
 
 test('dice cuándo se usó en palabras', () => {
-  assert.equal(usedAgo(NOW - 1 * HOURS, NOW), 'hoy')
-  assert.equal(usedAgo(NOW - 20 * HOURS, NOW), 'ayer')
-  assert.equal(usedAgo(NOW - 3 * 24 * HOURS, NOW), 'hace 3 días')
-  assert.equal(usedAgo(NOW - 9 * 24 * HOURS, NOW), 'hace 1 semana')
-  assert.equal(usedAgo(NOW - 20 * 24 * HOURS, NOW), 'hace 2 semanas')
-  assert.equal(usedAgo(NOW - 70 * 24 * HOURS, NOW), 'hace 2 meses')
-  assert.equal(usedAgo(NOW - 400 * 24 * HOURS, NOW), 'hace 1 año')
+  assert.equal(usedAgo(NOW - 1 * HOURS, NOW), 'today')
+  assert.equal(usedAgo(NOW - 20 * HOURS, NOW), 'yesterday')
+  assert.equal(usedAgo(NOW - 3 * 24 * HOURS, NOW), '3 days ago')
+  assert.equal(usedAgo(NOW - 9 * 24 * HOURS, NOW), '1 week ago')
+  assert.equal(usedAgo(NOW - 20 * 24 * HOURS, NOW), '2 weeks ago')
+  assert.equal(usedAgo(NOW - 70 * 24 * HOURS, NOW), '2 months ago')
+  assert.equal(usedAgo(NOW - 400 * 24 * HOURS, NOW), '1 year ago')
 })

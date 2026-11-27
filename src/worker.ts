@@ -177,7 +177,7 @@ export function createActivate(deps: WorkerDeps) {
         return await lastUsedByProject(orca.host)
       } catch (error) {
         // Sin fechas el panel sigue funcionando, solo pierde el orden por uso.
-        log(`No se pudo leer la actividad de los workspaces: ${errorMessage(error)}`)
+        log(`Could not read workspace activity: ${errorMessage(error)}`)
         return new Map()
       }
     }
@@ -230,7 +230,7 @@ export function createActivate(deps: WorkerDeps) {
         orca.panels.post('state.changed', next)
         return next
       } catch (error) {
-        log(`No se pudo avisar al panel: ${errorMessage(error)}`)
+        log(`Could not notify the panel: ${errorMessage(error)}`)
         return null
       }
     }
@@ -246,7 +246,7 @@ export function createActivate(deps: WorkerDeps) {
       try {
         await orca.host.call('statusBar.update', { id: STATUS, ...update })
       } catch (error) {
-        log(`No se pudo cambiar la barra de estado: ${errorMessage(error)}`)
+        log(`Could not update the status bar: ${errorMessage(error)}`)
       }
     }
 
@@ -254,7 +254,7 @@ export function createActivate(deps: WorkerDeps) {
       try {
         await orca.host.call('notifications.show', { title, body })
       } catch (error) {
-        log(`No se pudo mostrar el aviso: ${errorMessage(error)}`)
+        log(`Could not show the notification: ${errorMessage(error)}`)
       }
     }
 
@@ -293,7 +293,7 @@ export function createActivate(deps: WorkerDeps) {
       controller.abort()
       if (progress) progress.stopping = true
       postProgress()
-      log('Detenido a petición.')
+      log('Stopped on request.')
       return true
     }
 
@@ -323,7 +323,7 @@ export function createActivate(deps: WorkerDeps) {
         await orca.host.call('workspace.open', { workspaceId: main.id })
         return project.name
       } catch (error) {
-        log(`No se pudo mostrar el proyecto al terminar: ${errorMessage(error)}`)
+        log(`Could not show the project at the end: ${errorMessage(error)}`)
         return undefined
       }
     }
@@ -335,10 +335,10 @@ export function createActivate(deps: WorkerDeps) {
       const signal = beginProgress('run')
       const startedAt = deps.now()
       void setStatus({
-        text: 'Monstruito: actualizando…',
+        text: 'Monstruito: updating…',
         icon: 'refresh',
         tone: 'accent',
-        tooltip: 'Trayendo cambios y abriendo lo configurado'
+        tooltip: 'Pulling changes and opening what is configured'
       })
       void broadcast()
       try {
@@ -390,7 +390,7 @@ export function createActivate(deps: WorkerDeps) {
         }
         return record
       } catch (error) {
-        log(`La ejecución falló: ${errorMessage(error)}`)
+        log(`The run failed: ${errorMessage(error)}`)
         await setStatus({ text: 'Monstruito: error', icon: 'error', tone: 'danger', tooltip: errorMessage(error) })
         return null
       } finally {
@@ -400,7 +400,7 @@ export function createActivate(deps: WorkerDeps) {
       }
     }
 
-    /** Descarga y cuenta lo que hay por traer en los proyectos marcados, sin mover nada. */
+    /** Descarga y cuenta los commits sin aplicar de los proyectos marcados, sin mover nada. */
     async function recheck(): Promise<PendingCheck | null> {
       if (running || checking) return null
       checking = true
@@ -431,12 +431,18 @@ export function createActivate(deps: WorkerDeps) {
           try {
             const incoming = await checkIncoming(git, project.path, settings.fetchAll)
             return incoming && incoming.count > 0
-              ? { projectId: project.id, name: project.name, upstream: incoming.upstream, count: incoming.count }
+              ? {
+                  projectId: project.id,
+                  name: project.name,
+                  upstream: incoming.upstream,
+                  count: incoming.count,
+                  ...(settings.gitMode === 'fetch' ? { fetchOnly: true } : {})
+                }
               : null
           } catch (error) {
             if (!signal.aborted) {
               failed++
-              log(`${project.name}: no se pudo revisar: ${errorMessage(error)}`)
+              log(`${project.name}: could not check: ${errorMessage(error)}`)
             }
             return null
           } finally {
@@ -455,11 +461,11 @@ export function createActivate(deps: WorkerDeps) {
         const before = new Map((previous?.projects ?? []).map((item) => [item.projectId, item.count]))
         const grown = pending.projects.filter((item) => item.count > (before.get(item.projectId) ?? 0))
         if (global.notifyOnFinish && grown.length > 0) {
-          await notify('Commits nuevos por traer', grown.map((item) => `${item.name} (${item.count})`).join(', '))
+          await notify('New commits not applied', grown.map((item) => `${item.name} (${item.count})`).join(', '))
         }
         return pending
       } catch (error) {
-        log(`La revisión falló: ${errorMessage(error)}`)
+        log(`The check failed: ${errorMessage(error)}`)
         return null
       } finally {
         checking = false
@@ -477,7 +483,7 @@ export function createActivate(deps: WorkerDeps) {
         recheckTimer = setInterval(() => void recheck(), minutes * 60_000)
         // Que el temporizador no mantenga vivo el proceso por sí solo.
         ;(recheckTimer as { unref?: () => void }).unref?.()
-        log(`Revisión de commits nuevos cada ${minutes} min.`)
+        log(`Checking for new commits every ${minutes} min.`)
       }
     }
 
@@ -495,7 +501,7 @@ export function createActivate(deps: WorkerDeps) {
     async function startup(): Promise<void> {
       if (isSameOrcaSession(await orca.storage.get(SESSION))) {
         await refreshSchedule()
-        log('El worker se ha reiniciado con Orca abierto: no repito el arranque.')
+        log('The worker restarted while Orca was open: not repeating the startup run.')
         return
       }
       await orca.storage.set(SESSION, { parentPid: deps.parentPid, at: deps.now() })
@@ -506,17 +512,17 @@ export function createActivate(deps: WorkerDeps) {
       const profile = profileForDay(active.profiles, active.profile.id, weekday)
       if (profile.id !== active.profile.id) {
         await orca.storage.set(ACTIVE_PROFILE, profile.id)
-        log(`Hoy toca el perfil «${profile.name}».`)
+        log(`Today's profile: "${profile.name}".`)
       }
       await refreshSchedule()
 
       const settings = resolveSettings(await readBase(), profile.settings)
       if (!settings.runOnStartup) {
-        log(`"Ejecutar al abrir Orca" está apagado en «${profile.name}»: no hago nada.`)
+        log(`"Run when Orca opens" is off in "${profile.name}": doing nothing.`)
         return
       }
       if (profile.selection.length === 0) {
-        log(`No hay proyectos marcados en «${profile.name}».`)
+        log(`No projects selected in "${profile.name}".`)
         return
       }
       await deps.sleep(settings.startupDelaySeconds * 1000)
@@ -619,7 +625,7 @@ export function createActivate(deps: WorkerDeps) {
 
     orca.panels.handle('profile.create', async ({ name, copyFrom }) => {
       const profiles = await readProfiles()
-      const clean = name.trim().slice(0, 60) || 'Nuevo perfil'
+      const clean = name.trim().slice(0, 60) || 'New profile'
       const source = copyFrom ? profiles.find((profile) => profile.id === copyFrom) : undefined
       const profile: Profile = {
         ...emptyProfile(newProfileId(profiles, clean), clean),
@@ -636,7 +642,7 @@ export function createActivate(deps: WorkerDeps) {
     orca.panels.handle('profile.update', async ({ profileId, patch }: { profileId: string; patch: ProfilePatch }) => {
       const profiles = await readProfiles()
       const profile = profiles.find((item) => item.id === profileId)
-      if (!profile) throw new Error('Ese perfil ya no existe.')
+      if (!profile) throw new Error('That profile no longer exists.')
       if (patch.name !== undefined && patch.name.trim()) profile.name = patch.name.trim().slice(0, 60)
       if (patch.openAtEnd !== undefined) profile.openAtEnd = patch.openAtEnd
       if (patch.settings !== undefined) profile.settings = sanitizePartialSettings(patch.settings)
@@ -654,7 +660,7 @@ export function createActivate(deps: WorkerDeps) {
 
     orca.panels.handle('profile.delete', async ({ profileId }) => {
       const profiles = await readProfiles()
-      if (profiles.length <= 1) throw new Error('Tiene que quedar al menos un perfil.')
+      if (profiles.length <= 1) throw new Error('At least one profile must remain.')
       const remaining = profiles.filter((profile) => profile.id !== profileId)
       await writeProfiles(remaining)
       const activeId = await orca.storage.get(ACTIVE_PROFILE)
@@ -716,13 +722,13 @@ export function createActivate(deps: WorkerDeps) {
       if (Array.isArray(file.projectCommands)) await orca.storage.set(COMMANDS, asJson(applied.commands))
       await writeSettings(applied.settings)
       await refreshSchedule()
-      log(`Importados ${applied.report.profiles} perfiles; ${applied.report.missing.length} proyectos sin encontrar.`)
+      log(`Imported ${applied.report.profiles} profiles; ${applied.report.missing.length} projects not found.`)
       return { state: await answer(), report: applied.report }
     })
 
     orca.panels.handle('config.undoImport', async () => {
       const value = await orca.storage.get(IMPORT_BACKUP)
-      if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('No hay ninguna importación que deshacer.')
+      if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('There is no import to undo.')
       const backup = value as unknown as Backup
       await writeProfiles(sanitizeProfiles(backup.profiles, []))
       await orca.storage.set(ACTIVE_PROFILE, backup.activeProfileId)
@@ -738,16 +744,16 @@ export function createActivate(deps: WorkerDeps) {
 
     orca.commands.register('monstruito.run', async () => {
       const record = await run('manual')
-      return record ? describeRun(record) : 'Ya hay una ejecución o una revisión en marcha.'
+      return record ? describeRun(record) : 'A run or a check is already in progress.'
     })
 
     orca.commands.register('monstruito.check', async () => {
       const pending = await recheck()
-      if (!pending) return 'Ya hay una ejecución o una revisión en marcha, o se detuvo.'
+      if (!pending) return 'A run or a check is already in progress, or it was stopped.'
       return statusForPending(pending).tooltip
     })
 
-    orca.commands.register('monstruito.stop', () => (stop() ? 'Deteniendo…' : 'No hay nada en marcha.'))
+    orca.commands.register('monstruito.stop', () => (stop() ? 'Stopping…' : 'Nothing is running.'))
 
     orca.settings.onDidChange(() => {
       void refreshSchedule()
@@ -758,7 +764,7 @@ export function createActivate(deps: WorkerDeps) {
     orca.events.on('workspace.created', () => void broadcast())
     orca.events.on('workspace.removed', () => void broadcast())
 
-    const task = startup().catch((error) => log(`El arranque falló: ${errorMessage(error)}`))
+    const task = startup().catch((error) => log(`The startup run failed: ${errorMessage(error)}`))
     deps.onStartup?.(task)
   }
 }

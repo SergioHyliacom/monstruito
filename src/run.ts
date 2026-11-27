@@ -239,7 +239,7 @@ async function openCommandTab(
           name,
           kind: 'tab',
           result: 'already-open',
-          message: 'No se pudo reiniciar: esa pestaña no la abrió Monstruito.'
+          message: "Could not restart it: Monstruito didn't open that tab."
         }
       }
       // Que el servidor anterior suelte su puerto antes de mirar cuáles hay.
@@ -260,7 +260,7 @@ async function runPrepare(deps: RunDeps, project: Project, command: CommandDef):
   const outcome = await deps.shell(project.path, command.command, PREPARE_TIMEOUT, deps.signal)
   return outcome.ok
     ? { name, kind: 'prepare', result: 'ok' }
-    : { name, kind: 'prepare', result: 'failed', message: lastLines(outcome.output, 3) || 'falló sin salida' }
+    : { name, kind: 'prepare', result: 'failed', message: lastLines(outcome.output, 3) || 'failed with no output' }
 }
 
 async function runProject(
@@ -292,7 +292,7 @@ async function runProject(
   }
   // Detener: lo que ya se hizo se cuenta; lo que falta, no se empieza.
   const cancelled = (): ProjectResult => {
-    deps.log(`${project.name}: detenido`)
+    deps.log(`${project.name}: stopped`)
     return result
   }
   if (stopped()) return { ...result, git: { kind: 'cancelled' } }
@@ -305,7 +305,12 @@ async function runProject(
         mode: settings.gitMode,
         fetchAll: settings.fetchAll,
         skipIfDirty: settings.skipIfDirty,
-        updateSubmodules: settings.updateSubmodules
+        updateSubmodules: settings.updateSubmodules,
+        rebaseIfDiverged: settings.rebaseIfDiverged,
+        reportAhead: settings.reportAhead,
+        // Sin la señal de Detener: un rebase no se corta a medias.
+        steady: (cwd, args, timeoutMs) => deps.git(cwd, args, timeoutMs),
+        stopped
       })
       result.git = synced.outcome
       changedFiles = synced.changedFiles
@@ -375,7 +380,7 @@ async function runProject(
   for (const command of tabs) {
     if (stopped()) return cancelled()
     if (!main) {
-      result.commands.push({ name: commandLabel(command), kind: 'tab', result: 'failed', message: 'Sin workspace en Orca.' })
+      result.commands.push({ name: commandLabel(command), kind: 'tab', result: 'failed', message: 'No workspace in Orca.' })
       continue
     }
     step('command')
@@ -389,13 +394,13 @@ async function runProject(
       try {
         outcome.url = await waitForWeb(web, main.path, snapshot.ports, { signal, sleep: deps.sleep })
       } catch (error) {
-        if (!stopped()) outcome.message = `La web no se abrió: ${errorMessage(error)}`
+        if (!stopped()) outcome.message = `The web page did not open: ${errorMessage(error)}`
       }
     }
     result.commands.push(outcome)
   }
 
-  deps.log(`${project.name}: git ${result.git.kind}, agente ${result.agent.kind}`)
+  deps.log(`${project.name}: git ${result.git.kind}, agent ${result.agent.kind}`)
   return result
 }
 

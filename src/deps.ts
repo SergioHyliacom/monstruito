@@ -118,7 +118,7 @@ export async function runInstalls(
     results.push(
       result.ok
         ? { command, kind: 'ok' }
-        : { command, kind: 'failed', message: lastLines(result.output, 3) || 'falló sin salida' }
+        : { command, kind: 'failed', message: lastLines(result.output, 3) || 'failed with no output' }
     )
   }
   return results

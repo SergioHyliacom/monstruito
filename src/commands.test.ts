@@ -28,12 +28,12 @@ test('qué archivos casan con cada patrón', () => {
 test('cuándo toca un comando', () => {
   const always = emptyCommand('c1', 'npm run dev')
   assert.deepEqual(shouldRun(always, upToDate, []), { run: true })
-  assert.deepEqual(shouldRun({ ...always, enabled: false }, updated, []), { run: false, reason: 'desactivado' })
-  assert.deepEqual(shouldRun({ ...always, when: 'commits' }, upToDate, []), { run: false, reason: 'sin commits nuevos' })
+  assert.deepEqual(shouldRun({ ...always, enabled: false }, updated, []), { run: false, reason: 'disabled' })
+  assert.deepEqual(shouldRun({ ...always, when: 'commits' }, upToDate, []), { run: false, reason: 'no new commits' })
   assert.deepEqual(shouldRun({ ...always, when: 'commits' }, updated, []), { run: true })
   assert.deepEqual(
     shouldRun({ ...always, when: 'files', files: ['database/migrations/'] }, updated, ['README.md']),
-    { run: false, reason: 'no cambiaron esos archivos' }
+    { run: false, reason: "those files didn't change" }
   )
   assert.deepEqual(
     shouldRun({ ...always, when: 'files', files: ['database/migrations/'] }, updated, ['database/migrations/x.php']),

@@ -192,7 +192,7 @@ test('al abrir Orca trae los cambios y abre Claude con el resumen', async () => 
   assert.equal(launches.length, 1)
   assert.equal(launches[0].workspaceId, WORKSPACE.id)
   assert.equal(launches[0].agent, 'claude')
-  assert.ok(launches[0].prompt?.includes('2 commits nuevos de origin/main'))
+  assert.ok(launches[0].prompt?.includes('pulled 2 new commits from origin/main'))
   assert.ok(launches[0].prompt?.includes('bbb Arregla el login'))
   assert.ok(!launches[0].prompt?.includes('\n'), 'el prompt va en una sola línea')
 
@@ -276,7 +276,7 @@ test('una rama sin remota no se toca', async () => {
   await worker.deactivate()
 })
 
-test('en modo solo descargar no mueve la rama y cuenta lo que hay por traer', async () => {
+test('en modo solo descargar no mueve la rama y cuenta los commits sin aplicar', async () => {
   const repo = fakeRepo({ commits: ['bbb Uno', 'ccc Dos'] })
   const { host, mount } = setupWorker(repo.git, { settings: { gitMode: 'fetch', mode: 'summarize' } })
   const worker = await mount()
@@ -288,7 +288,7 @@ test('en modo solo descargar no mueve la rama y cuenta lo que hay por traer', as
     commits: ['bbb Uno', 'ccc Dos']
   })
   const [launch] = host.callsOf('agent.launch') as Launch[]
-  assert.ok(launch.prompt?.includes('todavía no están en tu rama'))
+  assert.ok(launch.prompt?.includes('not in your branch yet'))
   await worker.deactivate()
 })
 
@@ -426,7 +426,7 @@ test('con modelo abre el agente por la CLI de Orca, con modelo y razonamiento', 
     effort: 'high',
     prompt: undefined
   })
-  assert.ok(launch.prompt?.includes('1 commits nuevos de origin/main'))
+  assert.ok(launch.prompt?.includes('pulled 1 new commits from origin/main'))
   assert.deepEqual(lastRun(host).results[0].agent, { kind: 'launched', agent: 'claude', withPrompt: true, model: 'opus' })
   await worker.deactivate()
 })
@@ -586,8 +586,8 @@ test('preparación antes del agente, pestañas después, y cada una con su condi
   assert.deepEqual(lastRun(host).results[0].commands, [
     { name: 'docker compose up -d', kind: 'prepare', result: 'ok' },
     { name: 'php artisan migrate --force', kind: 'prepare', result: 'ok' },
-    { name: 'npm run build', kind: 'prepare', result: 'skipped', message: 'no cambiaron esos archivos' },
-    { name: 'npm run storybook', kind: 'tab', result: 'skipped', message: 'desactivado' },
+    { name: 'npm run build', kind: 'prepare', result: 'skipped', message: "those files didn't change" },
+    { name: 'npm run storybook', kind: 'tab', result: 'skipped', message: 'disabled' },
     { name: 'servidor', kind: 'tab', result: 'opened' }
   ])
   await worker.deactivate()
@@ -630,7 +630,7 @@ test('reiniciar cierra la pestaña que abrió el arranque y abre otra', async ()
       name: 'npm run dev',
       kind: 'tab',
       result: 'already-open',
-      message: 'No se pudo reiniciar: esa pestaña no la abrió Monstruito.'
+      message: "Could not restart it: Monstruito didn't open that tab."
     }
   ])
   await worker.deactivate()
@@ -710,7 +710,7 @@ test('avisa al terminar si está activado', async () => {
   const { host, mount } = setupWorker(fakeRepo({ commits: ['bbb Uno'] }).git)
   const worker = await mount()
   assert.deepEqual(host.callsOf('notifications.show'), [
-    { title: 'Monstruito', body: 'Principal · 1 proyecto · 1 con commits nuevos · sin problemas' }
+    { title: 'Monstruito', body: 'Main · 1 project · 1 with new commits · no problems' }
   ])
   await worker.deactivate()
 })
@@ -727,18 +727,32 @@ test('revisar commits descarga, cuenta y avisa sin mover nada ni abrir agentes',
   const { host, mount } = setupWorker(repo.git, { settings: { runOnStartup: false } })
   const worker = await mount()
   const answer = await worker.command('monstruito.check')
-  assert.ok(String(answer).includes('web: 2 commits por traer'))
+  assert.ok(String(answer).includes('web: 2 commits not applied'))
+  assert.ok(String(answer).includes('Click to apply them.'))
   const pending = host.data().storage.pending as PendingCheck
   assert.deepEqual(pending.projects, [{ projectId: 'p1', name: 'web', upstream: 'origin/main', count: 2 }])
   assert.ok(!repo.calls.some((args) => args[0] === 'merge'))
   assert.deepEqual(host.callsOf('agent.launch'), [])
   assert.deepEqual(host.callsOf('notifications.show'), [
-    { title: 'Commits nuevos por traer', body: 'web (2)' }
+    { title: 'New commits not applied', body: 'web (2)' }
   ])
 
   // Una segunda revisión con lo mismo no vuelve a avisar.
   await worker.command('monstruito.check')
   assert.equal(host.callsOf('notifications.show').length, 1)
+  await worker.deactivate()
+})
+
+test('revisar commits en modo solo descargar no promete que Ejecutar ahora los aplique', async () => {
+  const repo = fakeRepo({ commits: ['bbb Uno'] })
+  const { host, mount } = setupWorker(repo.git, { settings: { runOnStartup: false, gitMode: 'fetch' } })
+  const worker = await mount()
+  const answer = String(await worker.command('monstruito.check'))
+  assert.ok(answer.includes('web: 1 commit not applied (fetch only)'))
+  assert.ok(answer.includes('Already fetched; apply them with git pull.'))
+  assert.ok(!answer.includes('Click'))
+  const pending = host.data().storage.pending as PendingCheck
+  assert.equal(pending.projects[0].fetchOnly, true)
   await worker.deactivate()
 })
 
@@ -815,7 +829,7 @@ test('lo marcado antes de los perfiles pasa a «Principal»', async () => {
   const state = await worker.request('state.get')
   assert.deepEqual(
     state.profiles.map((item) => [item.id, item.name, item.selection]),
-    [['principal', 'Principal', ['p1']]]
+    [['principal', 'Main', ['p1']]]
   )
   assert.equal(state.activeProfileId, 'principal')
   assert.equal(state.projects[0].selected, true)
@@ -872,7 +886,7 @@ test('crear, elegir, cambiar y borrar perfiles', async () => {
   state = await worker.request('profile.delete', { profileId: 'trabajo' })
   assert.deepEqual(state.profiles.map((item) => item.id), ['principal'])
   assert.equal(state.activeProfileId, 'principal')
-  await assert.rejects(worker.request('profile.delete', { profileId: 'principal' }), /al menos un perfil/)
+  await assert.rejects(worker.request('profile.delete', { profileId: 'principal' }), /At least one profile/)
   assert.deepEqual(worker.refusals, [])
   await worker.deactivate()
 })
@@ -936,7 +950,7 @@ test('Detener corta git en marcha y no abre nada más', async () => {
   assert.deepEqual(run.results[0].git, { kind: 'cancelled' })
   assert.deepEqual(run.results[0].agent, { kind: 'cancelled' })
   assert.deepEqual(host.callsOf('agent.launch'), [])
-  assert.equal(await worker.command('monstruito.stop'), 'No hay nada en marcha.')
+  assert.equal(await worker.command('monstruito.stop'), 'Nothing is running.')
   await worker.deactivate()
 })
 
@@ -1000,8 +1014,8 @@ test('exporta e importa la configuración, y se puede deshacer', async () => {
   assert.equal(undone.canUndoImport, false)
   assert.equal(host.data().storage.importBackup, undefined)
 
-  await assert.rejects(worker.request('config.import', { text: 'no es json' }), /No es un JSON válido/)
-  await assert.rejects(worker.request('config.import', { text: '{"a":1}' }), /No es una exportación/)
+  await assert.rejects(worker.request('config.import', { text: 'no es json' }), /not valid JSON/)
+  await assert.rejects(worker.request('config.import', { text: '{"a":1}' }), /not a Monstruito export/)
   await worker.deactivate()
 })
 

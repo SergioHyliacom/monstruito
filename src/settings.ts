@@ -19,6 +19,8 @@ export const DEFAULT_SETTINGS: GlobalSettings = {
   skipIfDirty: false,
   fetchAll: false,
   updateSubmodules: false,
+  rebaseIfDiverged: false,
+  reportAhead: true,
   fetchOtherWorktrees: false,
   agent: 'claude',
   model: '',
@@ -63,9 +65,9 @@ export type ModelSupport = {
 const MODEL_SUPPORT: Record<string, ModelSupport> = {
   claude: {
     models: [
-      { value: 'opus', label: 'Opus (el último)' },
-      { value: 'sonnet', label: 'Sonnet (el último)' },
-      { value: 'haiku', label: 'Haiku (el último)' },
+      { value: 'opus', label: 'Opus (latest)' },
+      { value: 'sonnet', label: 'Sonnet (latest)' },
+      { value: 'haiku', label: 'Haiku (latest)' },
       { value: 'claude-fable-5-2', label: 'Claude Fable 5.2' },
       { value: 'claude-opus-5-5', label: 'Claude Opus 5.5' },
       { value: 'claude-sonnet-5-5', label: 'Claude Sonnet 5.5' },
@@ -75,9 +77,9 @@ const MODEL_SUPPORT: Record<string, ModelSupport> = {
     effort: true
   },
   codex: { models: [], placeholder: 'gpt-6-astra', effort: true },
-  cursor: { models: [], placeholder: 'id del modelo', effort: true },
-  grok: { models: [], placeholder: 'id del modelo', effort: true },
-  opencode: { models: [], placeholder: 'proveedor/modelo', effort: false }
+  cursor: { models: [], placeholder: 'model id', effort: true },
+  grok: { models: [], placeholder: 'model id', effort: true },
+  opencode: { models: [], placeholder: 'provider/model', effort: false }
 }
 
 export function modelSupport(agent: string): ModelSupport | null {
@@ -85,32 +87,32 @@ export function modelSupport(agent: string): ModelSupport | null {
 }
 
 export const EFFORTS: { value: string; label: string }[] = [
-  { value: '', label: 'El del agente' },
-  { value: 'low', label: 'Bajo' },
-  { value: 'medium', label: 'Medio' },
-  { value: 'high', label: 'Alto' },
-  { value: 'xhigh', label: 'Muy alto' },
-  { value: 'max', label: 'Máximo' }
+  { value: '', label: "The agent's default" },
+  { value: 'low', label: 'Low' },
+  { value: 'medium', label: 'Medium' },
+  { value: 'high', label: 'High' },
+  { value: 'xhigh', label: 'Extra high' },
+  { value: 'max', label: 'Max' }
 ]
 
 /** Cómo se ve un modelo: su nombre en la lista, o el id tal cual. */
 export function modelLabel(agent: string, model: string): string {
-  if (!model) return 'el del agente'
+  if (!model) return "the agent's default"
   return modelSupport(agent)?.models.find((option) => option.value === model)?.label ?? model
 }
 
 const GIT_MODES: { value: GitMode; label: string }[] = [
-  { value: 'pull', label: 'Descargar y avanzar la rama' },
-  { value: 'fetch', label: 'Solo descargar, sin mover la rama' },
-  { value: 'none', label: 'No tocar git' }
+  { value: 'pull', label: 'Fetch and fast-forward the branch' },
+  { value: 'fetch', label: 'Fetch only, without moving the branch' },
+  { value: 'none', label: "Don't touch git" }
 ]
 
 const AGENT_MODES: { value: AgentMode; label: string }[] = [
-  { value: 'wait', label: 'Abrirse y esperar' },
-  { value: 'summarize', label: 'Resumir los commits nuevos' },
-  { value: 'prompt', label: 'Enviar mi prompt siempre' },
-  { value: 'resume', label: 'Retomar la última sesión' },
-  { value: 'none', label: 'No abrir agente' }
+  { value: 'wait', label: 'Open and wait' },
+  { value: 'summarize', label: 'Summarize the new commits' },
+  { value: 'prompt', label: 'Always send my prompt' },
+  { value: 'resume', label: 'Resume the last session' },
+  { value: 'none', label: "Don't open an agent" }
 ]
 
 const PROJECT_KEYS = [
@@ -118,6 +120,8 @@ const PROJECT_KEYS = [
   'skipIfDirty',
   'fetchAll',
   'updateSubmodules',
+  'rebaseIfDiverged',
+  'reportAhead',
   'fetchOtherWorktrees',
   'agent',
   'model',
@@ -142,47 +146,60 @@ export type FieldDef =
 
 export type FieldGroup = { title: string; fields: FieldDef[] }
 
-export const PROMPT_HELP = 'Variables: {proyecto}, {rama}, {remota}, {n_commits}, {commits}.'
+export const PROMPT_HELP = 'Variables: {project}, {branch}, {upstream}, {n_commits}, {commits}.'
 
 export const GLOBAL_GROUPS: FieldGroup[] = [
   {
-    title: 'Arranque',
+    title: 'Startup',
     fields: [
-      { key: 'runOnStartup', kind: 'toggle', label: 'Ejecutar al abrir Orca' },
-      { key: 'startupDelaySeconds', kind: 'number', label: 'Espera al abrir Orca', presets: [0, 2, 4, 10, 30, 60], unit: 's' },
-      { key: 'concurrency', kind: 'number', label: 'Proyectos a la vez', presets: [1, 2, 4, 8, 16], unit: '' },
-      { key: 'notifyOnFinish', kind: 'toggle', label: 'Avisar al terminar', description: 'Y cuando la revisión periódica encuentre commits nuevos.' },
-      { key: 'recheckMinutes', kind: 'number', label: 'Revisar commits nuevos cada', presets: [0, 5, 10, 15, 30, 60, 120], unit: ' min', zero: 'Nunca' }
+      { key: 'runOnStartup', kind: 'toggle', label: 'Run when Orca opens' },
+      { key: 'startupDelaySeconds', kind: 'number', label: 'Delay when Orca opens', presets: [0, 2, 4, 10, 30, 60], unit: 's' },
+      { key: 'concurrency', kind: 'number', label: 'Projects at a time', presets: [1, 2, 4, 8, 16], unit: '' },
+      { key: 'notifyOnFinish', kind: 'toggle', label: 'Notify when done', description: 'And when the periodic check finds new commits.' },
+      { key: 'recheckMinutes', kind: 'number', label: 'Check for new commits every', presets: [0, 5, 10, 15, 30, 60, 120], unit: ' min', zero: 'Never' }
     ]
   },
   {
     title: 'Git',
     fields: [
-      { key: 'gitMode', kind: 'choice', label: 'Qué hacer con git', options: GIT_MODES },
-      { key: 'skipIfDirty', kind: 'toggle', label: 'Saltar si hay cambios sin commitear' },
-      { key: 'fetchAll', kind: 'toggle', label: 'Todas las ramas y limpiar las borradas', description: 'git fetch --all --prune' },
-      { key: 'updateSubmodules', kind: 'toggle', label: 'Actualizar submódulos' },
-      { key: 'fetchOtherWorktrees', kind: 'toggle', label: 'Informar de los demás worktrees', description: 'Cuántos commits va por detrás cada uno; no los mueve.' }
+      { key: 'gitMode', kind: 'choice', label: 'What to do with git', options: GIT_MODES },
+      {
+        key: 'rebaseIfDiverged',
+        kind: 'toggle',
+        label: 'Rebase if the branch has diverged',
+        description:
+          'When you have local commits and the remote has new ones: git rebase onto the remote. On a conflict it runs git rebase --abort and leaves the branch as it was.'
+      },
+      { key: 'skipIfDirty', kind: 'toggle', label: 'Skip if there are uncommitted changes' },
+      { key: 'fetchAll', kind: 'toggle', label: 'All branches, and prune deleted ones', description: 'git fetch --all --prune' },
+      { key: 'updateSubmodules', kind: 'toggle', label: 'Update submodules' },
+      {
+        key: 'reportAhead',
+        kind: 'toggle',
+        label: 'Report unpushed commits',
+        description: 'Counts the local commits that are not on the remote yet. Read-only.'
+      },
+      { key: 'fetchOtherWorktrees', kind: 'toggle', label: 'Report on the other worktrees', description: 'How many commits each one is behind; it does not move them.' }
     ]
   },
   {
-    title: 'Agente',
+    title: 'Agent',
     fields: [
-      { key: 'agent', kind: 'choice', label: 'Agente', options: AGENTS },
-      { key: 'model', kind: 'model', label: 'Modelo', maxLength: 200 },
-      { key: 'effort', kind: 'choice', label: 'Razonamiento', description: 'Solo se aplica si eliges un modelo.', options: EFFORTS },
-      { key: 'mode', kind: 'choice', label: 'Qué hace el agente', options: AGENT_MODES },
-      { key: 'onlyWithCommits', kind: 'toggle', label: 'Solo si hay commits nuevos' },
-      { key: 'prompt', kind: 'text', label: 'Prompt de arranque', description: PROMPT_HELP, placeholder: 'Vacío = el resumen por defecto', multiline: true, maxLength: 4000 },
-      { key: 'staggerSeconds', kind: 'number', label: 'Segundos entre agentes', presets: [0, 2, 5, 10, 30, 60], unit: 's' }
+      { key: 'agent', kind: 'choice', label: 'Agent', options: AGENTS },
+      { key: 'model', kind: 'model', label: 'Model', maxLength: 200 },
+      { key: 'effort', kind: 'choice', label: 'Reasoning effort', description: 'Only applies if you choose a model.', options: EFFORTS },
+      { key: 'mode', kind: 'choice', label: 'What the agent does', options: AGENT_MODES },
+      { key: 'onlyWithCommits', kind: 'toggle', label: 'Only if there are new commits' },
+      { key: 'prompt', kind: 'text', label: 'Startup prompt', description: PROMPT_HELP, placeholder: 'Empty = the default summary', multiline: true, maxLength: 4000 },
+      { key: 'staggerSeconds', kind: 'number', label: 'Seconds between agents', presets: [0, 2, 5, 10, 30, 60], unit: 's' }
     ]
   },
   {
-    title: 'Comandos',
+    title: 'Commands',
     fields: [
-      { key: 'installDeps', kind: 'toggle', label: 'Instalar dependencias si cambian', description: 'npm, pnpm, yarn, bun, composer, flutter, bundler, poetry o uv, antes de abrir nada.' },
-      { key: 'installMissing', kind: 'toggle', label: 'Instalar dependencias si faltan', description: 'Si no hay node_modules, vendor, .dart_tool o .venv (un clon nuevo), aunque git no haya cambiado nada.' },
-      { key: 'runCommands', kind: 'toggle', label: 'Ejecutar los comandos de cada proyecto', description: 'Los comandos se configuran en el engranaje de cada proyecto.' }
+      { key: 'installDeps', kind: 'toggle', label: 'Install dependencies when they change', description: 'npm, pnpm, yarn, bun, composer, flutter, bundler, poetry or uv, before opening anything.' },
+      { key: 'installMissing', kind: 'toggle', label: 'Install missing dependencies', description: 'If there is no node_modules, vendor, .dart_tool or .venv (a fresh clone), even if git changed nothing.' },
+      { key: 'runCommands', kind: 'toggle', label: "Run each project's commands", description: "Commands are set up in each project's gear." }
     ]
   }
 ]
@@ -302,13 +319,15 @@ export function effectiveSettings(global: GlobalSettings, override: ProjectOverr
 /** Variables del prompt a partir de lo que pasó con git. */
 export function promptVariables(project: string, branch: string | null, git: GitOutcome): Record<string, string> {
   const withCommits = git.kind === 'updated' || git.kind === 'fetched' ? git : null
-  return {
-    proyecto: project,
-    rama: branch ?? '',
-    remota: withCommits?.upstream ?? (git.kind === 'up-to-date' ? git.upstream : ''),
+  const variables = {
+    project,
+    branch: branch ?? '',
+    upstream: withCommits?.upstream ?? (git.kind === 'up-to-date' ? git.upstream : ''),
     n_commits: String(withCommits?.count ?? 0),
-    commits: withCommits && withCommits.commits.length > 0 ? withCommits.commits.join('; ') : 'ninguno'
+    commits: withCommits && withCommits.commits.length > 0 ? withCommits.commits.join('; ') : 'none'
   }
+  // Los nombres en español de antes siguen valiendo, para no romper los prompts guardados.
+  return { ...variables, proyecto: variables.project, rama: variables.branch, remota: variables.upstream }
 }
 
 /** Sustituye {variables} y deja el prompt en una sola línea: un salto podría enviarlo a medias. */
@@ -318,7 +337,7 @@ export function renderPrompt(template: string, variables: Record<string, string>
 }
 
 export const DEFAULT_SUMMARY_UPDATED =
-  'Al abrir Orca he traído {n_commits} commits nuevos de {remota}: {commits}. Resume en pocas líneas qué ha cambiado y avisa si algo merece atención antes de seguir trabajando. No cambies nada todavía.'
+  "When Orca opened I pulled {n_commits} new commits from {upstream}: {commits}. Summarize in a few lines what changed and flag anything that deserves attention before carrying on. Don't change anything yet."
 
 export const DEFAULT_SUMMARY_FETCHED =
-  'En {remota} hay {n_commits} commits nuevos que todavía no están en tu rama: {commits}. Resume qué traen y avisa si algo puede chocar con lo que hay en local. No cambies nada todavía.'
+  "{upstream} has {n_commits} new commits that are not in your branch yet: {commits}. Summarize what they bring and flag anything that might clash with your local work. Don't change anything yet."

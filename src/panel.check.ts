@@ -52,8 +52,8 @@ export default defineCheck({
     storage: {
       activeProfile: 'empresa',
       profiles: [
-        { id: 'empresa', name: 'Empresa', selection: ['p1', 'p2'], settings: {}, days: [1, 2, 3, 4, 5], openAtEnd: '__recent' },
-        { id: 'casa', name: 'Casa', selection: ['p3'], settings: { mode: 'wait' }, days: [0, 6], openAtEnd: '' }
+        { id: 'empresa', name: 'Work', selection: ['p1', 'p2'], settings: {}, days: [1, 2, 3, 4, 5], openAtEnd: '__recent' },
+        { id: 'casa', name: 'Home', selection: ['p3'], settings: { mode: 'wait' }, days: [0, 6], openAtEnd: '' }
       ],
       overrides: { p2: { mode: 'resume' } },
       commands: {
@@ -92,7 +92,7 @@ export default defineCheck({
             agent: { kind: 'already-open', agent: 'claude' },
             deps: [],
             commands: [
-              { name: 'php artisan migrate --force', kind: 'prepare', result: 'skipped', message: 'no cambiaron esos archivos' },
+              { name: 'php artisan migrate --force', kind: 'prepare', result: 'skipped', message: 'those files did not change' },
               { name: 'web', kind: 'tab', result: 'restarted', url: 'http://localhost:5173/' }
             ],
             worktrees: []

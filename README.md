@@ -1,165 +1,169 @@
 <p align="center">
-  <img src="assets/logo.png" width="180" alt="Monstruito, un gato negro mirando hacia arriba">
+  <img src="assets/logo.png" width="180" alt="Monstruito, a black cat looking up">
 </p>
 
 <h1 align="center">Monstruito</h1>
 
-Plugin de [Orca](https://github.com/stablyai/orca) que deja tus proyectos listos al abrir Orca. En cada proyecto que marques, y en este orden:
+An [Orca](https://github.com/stablyai/orca) plugin that gets your projects ready when Orca opens. In every project you select, in this order:
 
-1. **Git**: trae los cambios de la rama actual, o solo los descarga, o no toca nada.
-2. **Dependencias**: si el avance cambió un lockfile, o si faltan (un clon nuevo), las instala y espera a que acabe.
-3. **Comandos de preparación**: los del proyecto que van en segundo plano (`docker compose up -d`, migraciones…), esperando a cada uno.
-4. **Worktrees**: si lo pides, dice cuántos commits va por detrás cada uno de los demás worktrees.
-5. **Agente**: abre Claude (u otro agente) de la forma que elijas.
-6. **Comandos en pestaña**: los del proyecto que se quedan corriendo (`npm run dev`…), cada uno en la suya, y si quieres abre su web en el navegador de Orca.
+1. **Git**: pulls the current branch's changes, or only fetches them, or leaves git alone.
+2. **Dependencies**: if moving forward changed a lockfile, or if they are missing (a fresh clone), installs them and waits for it to finish.
+3. **Setup commands**: the project's background commands (`docker compose up -d`, migrations…), waiting for each one.
+4. **Worktrees**: if you ask for it, tells how many commits each of the other worktrees is behind.
+5. **Agent**: opens Claude (or another agent) the way you choose.
+6. **Tab commands**: the project's long-running commands (`npm run dev`…), each in its own tab, and if you want it opens their web page in Orca's browser.
 
-Al terminar puede mostrarte un proyecto para empezar a trabajar ahí.
+When it finishes it can show you a project to start working there.
 
-## Instalar
+## Install
 
 ```sh
 orca plugin install SergioHyliacom/monstruito
 ```
 
-Monstruito ejecuta código en tu equipo (git, instalaciones, comandos), así que Orca pide aprobar sus permisos: la orden anterior responde con el comando exacto, con `--approve`, para hacerlo. Después, el panel **Monstruito** aparece en la barra lateral (icono de gato).
+Monstruito runs code on your machine (git, installs, commands), so Orca asks you to approve its permissions: the command above answers with the exact command, with `--approve`, to do it. Then the **Monstruito** panel shows up in the sidebar (cat icon).
 
-Necesita Orca 1.4.274 o posterior.
+Requires Orca 1.4.274 or later.
 
-## Uso
+## Usage
 
-En el panel **Monstruito** (icono de gato):
+In the **Monstruito** panel (cat icon):
 
-- **Perfil:** elige con qué conjunto de proyectos trabajas (por ejemplo Trabajo o Casa), o crea uno con **+**.
-- **Elegir proyectos:** marca las casillas del árbol. Va por carpetas, de más reciente a más antiguo según tu actividad en Orca; las carpetas se pliegan y se recuerda cuáles tienes abiertas. **Marcar los N** marca una carpeta entera. Lo marcado pasa a una lista aparte, arriba.
-- **Ejecutar ahora:** hace lo mismo que al abrir Orca, con el perfil elegido. Mientras va, el panel enseña qué proyecto está en qué paso.
-- **Revisar commits:** descarga y cuenta lo que hay por traer, sin mover nada ni abrir agentes.
-- **Detener:** corta lo que esté en marcha. Lo hecho se queda; lo que falta no se empieza.
-- **Historial:** la última ejecución y, plegadas, las 9 anteriores.
-- **Recargar proyectos** (↻): vuelve a pedir los proyectos a Orca y quita la búsqueda. El panel también se actualiza solo cuando Orca avisa de que se ha creado o quitado un workspace.
-- **Ajustes** (⚙): los de todos los perfiles o los del perfil elegido, y exportar o importar.
-- **Ajustes y comandos de un proyecto:** el engranaje junto a él.
-- **Cerrar pestañas (N):** cierra de una vez las pestañas de comandos que abrió Monstruito.
+- **Profile:** choose which set of projects you work with (for example Work or Home), or create one with **+**.
+- **Choosing projects:** tick the boxes in the tree. It goes by folders, from most to least recent according to your activity in Orca; folders collapse and the open ones are remembered. **Select all N** selects a whole folder. Selected projects move to a separate list at the top.
+- **Run now:** does the same as when Orca opens, with the chosen profile. While it runs, the panel shows which project is at which step.
+- **Check commits:** fetches and counts the commits not applied, without moving anything or opening agents.
+- **Stop:** stops what is running. What's done stays; what's left doesn't start.
+- **History:** the last run and, collapsed, the 9 before it.
+- **Reload projects** (↻): asks Orca for the projects again and clears the search. The panel also updates on its own when Orca reports that a workspace was created or removed.
+- **Settings** (⚙): those of all profiles or of the chosen profile, plus export and import.
+- **A project's settings and commands:** the gear next to it.
+- **Close tabs (N):** closes at once the command tabs Monstruito opened.
 
-## Comandos
+## Commands
 
-Cada proyecto tiene su lista de comandos, en su engranaje, pestaña **Comandos**. Valen en todos los perfiles; un perfil puede apagarlos todos con «Ejecutar los comandos de cada proyecto».
+Each project has its own list of commands, in its gear, **Commands** tab. They apply in every profile; a profile can turn them all off with "Run each project's commands".
 
-- **Tipo:** *en su pestaña* (servidores, watchers: se abren al final y no se esperan) o *preparación* (en segundo plano antes de abrir el agente, esperando a que acabe; si falla, se cuenta y se sigue).
-- **Cuándo:** siempre, solo si entran commits, o solo si cambian ciertos archivos. Los archivos van desde la raíz del proyecto, separados por comas: `carpeta/` es todo lo de dentro, y valen `*` (dentro de una carpeta) y `**` (a cualquier profundidad). Por ejemplo `database/migrations/` para `php artisan migrate`.
-- **Reiniciar si ya está abierto:** cierra su pestaña y la abre otra vez. Solo puede con las pestañas que abrió Monstruito.
-- **Abrir la web cuando esté lista:** antes de abrir la pestaña mira qué puertos tiene el workspace; después espera (hasta 2 minutos) a uno nuevo y abre su dirección en el navegador de Orca, por detrás, sin moverte de donde estás.
-- **Sugerencias:** al abrir el engranaje propone comandos según el proyecto: scripts de `package.json` (con npm, pnpm, yarn o bun según el lockfile) y de `composer.json`, Laravel (`artisan`), docker compose, Makefile, Flutter, Django, Cargo y Go. Un clic los añade.
+- **Type:** *in its own tab* (servers, watchers: opened at the end and not waited for) or *setup* (in the background before opening the agent, waiting for it to finish; if it fails, it's reported and the rest goes on).
+- **When:** always, only when commits come in, or only when certain files change. Files are relative to the project root, separated by commas: `folder/` is everything inside, and `*` (within a folder) and `**` (at any depth) work. For example `database/migrations/` for `php artisan migrate`.
+- **Restart if already open:** closes its tab and opens it again. It only works with the tabs Monstruito opened.
+- **Open the web page when it's ready:** before opening the tab it looks at the workspace's ports; then it waits (up to 2 minutes) for a new one and opens its address in Orca's browser, in the background, without moving you from where you are.
+- **Suggestions:** when you open the gear it suggests commands based on the project: scripts from `package.json` (with npm, pnpm, yarn or bun depending on the lockfile) and `composer.json`, Laravel (`artisan`), docker compose, Makefile, Flutter, Django, Cargo and Go. One click adds them.
 
-Una pestaña de comando se llama «Monstruito: nombre» (o el comando, si no tiene nombre); así se reconoce si ya está abierta.
+A command tab is called "Monstruito: name" (or the command, if it has no name); that's how it knows whether it's already open.
 
-La barra de estado muestra el resumen de la última ejecución o revisión. Pulsarla ejecuta el arranque.
+The status bar shows the summary of the last run or check. Clicking it runs the startup.
 
-Por defecto no hay ningún proyecto marcado, así que instalarlo no hace nada hasta que elijas.
+By default no project is selected, so installing it does nothing until you choose.
 
-## Perfiles
+## Profiles
 
-Cada perfil tiene sus proyectos marcados y, además:
+Each profile has its selected projects and also:
 
-- **Días:** al abrir Orca esos días se usa ese perfil (por ejemplo Trabajo de lunes a viernes y Casa los fines de semana). Un día solo puede ser de un perfil; los días sin perfil se usa el elegido en el panel.
-- **Al terminar, mostrar:** nada, el marcado usado más recientemente o uno concreto. Solo al abrir Orca, para no moverte de sitio cuando ejecutas a mano.
-- **Ajustes propios:** cualquier ajuste general puede ser distinto en ese perfil.
+- **Days:** when Orca opens on those days that profile is used (for example Work Monday to Friday and Home at weekends). A day can only belong to one profile; on days without a profile the one chosen in the panel is used.
+- **When done, show:** nothing, the most recently used selected project, or a specific one. Only when Orca opens, so it doesn't move you around when you run it by hand.
+- **Own settings:** any general setting can be different in that profile.
 
-Los ajustes se aplican en tres capas: **todos los perfiles** (los de Settings) → **el perfil** → **el proyecto**. Los ajustes de un proyecto valen en todos los perfiles, porque describen al proyecto (su comando de arranque, por ejemplo).
+Settings apply in three layers: **all profiles** (the ones in Settings) → **the profile** → **the project**. A project's settings apply in every profile, because they describe the project (its startup command, for example).
 
-Lo marcado con versiones anteriores pasa a un perfil «Principal».
+Projects selected with earlier versions move to a "Main" profile.
 
-## Exportar e importar
+## Export and import
 
-En **Ajustes → Exportar o importar**:
+In **Settings → Export or import**:
 
-- **Exportar** guarda en un archivo los perfiles, los ajustes de todos los perfiles y los de cada proyecto.
-- **Importar:** pega el contenido del archivo (los paneles de Orca no pueden abrir archivos). Los proyectos se buscan por ruta y, si no está, por nombre, para que sirva en otro equipo; si dos se llaman igual, no se adivina. Sustituye lo que hay, pero antes guarda una copia: **Deshacer la última importación** la recupera.
+- **Export** saves the profiles, the settings of all profiles and those of each project to a file.
+- **Import:** paste the file's contents (Orca panels can't open files). Projects are matched by path and, failing that, by name, so it works on another machine; if two have the same name, it doesn't guess. It replaces what's there, but saves a copy first: **Undo the last import** brings it back.
 
-## Ajustes
+## Settings
 
-Todos se pueden cambiar en un perfil. La columna dice cuáles también por proyecto.
+All of them can be changed in a profile. The column says which ones can also be changed per project.
 
-| Ajuste | Por proyecto | Qué hace |
+| Setting | Per project | What it does |
 | --- | --- | --- |
-| Ejecutar al abrir Orca | no | Si está apagado, solo se ejecuta a mano |
-| Espera al abrir Orca | no | Segundos que deja a Orca para cargar antes de empezar |
-| Proyectos a la vez | no | Cuántos proyectos se procesan en paralelo |
-| Avisar al terminar | no | Notificación con el resumen, y cuando la revisión periódica encuentra commits nuevos |
-| Revisar commits nuevos cada | no | Con Orca abierto, revisa cada tantos minutos (0 = nunca) |
-| Segundos entre agentes | no | Espera entre abrir un agente y el siguiente |
-| Git | sí | Descargar y avanzar · Solo descargar · No tocar git |
-| Saltar si hay cambios sin commitear | sí | No trae nada si hay archivos versionados modificados |
-| Todas las ramas y limpiar las borradas | sí | `git fetch --all --prune` |
-| Actualizar submódulos | sí | `git submodule update --init --recursive` tras avanzar |
-| Informar de los demás worktrees | sí | Cuántos commits va por detrás cada uno; no los mueve |
-| Agente | sí | Claude, Codex, Copilot, Cursor, OpenCode… |
-| Qué hace el agente | sí | Abrirse y esperar · Resumir los commits nuevos · Enviar mi prompt siempre · Retomar la última sesión · No abrir agente |
-| Solo si hay commits nuevos | sí | El agente solo se abre donde han entrado commits |
-| Prompt de arranque | sí | Variables: `{proyecto}`, `{rama}`, `{remota}`, `{n_commits}`, `{commits}` |
-| Instalar dependencias si cambian | sí | Lockfiles de la raíz → `npm install`, `pnpm install`, `yarn install`, `bun install`, `composer install`, `flutter pub get`/`dart pub get`, `bundle install`, `poetry install`, `uv sync` |
-| Instalar dependencias si faltan | sí | Sin `node_modules`, `vendor`, `.dart_tool` o `.venv` → su instalación, aunque git no traiga nada |
-| Ejecutar los comandos de cada proyecto | sí | Apagado, no se lanza ninguno de sus comandos |
+| Run when Orca opens | no | When off, it only runs by hand |
+| Delay when Orca opens | no | Seconds Orca gets to load before starting |
+| Projects at a time | no | How many projects are processed in parallel |
+| Notify when done | no | Notification with the summary, and when the periodic check finds new commits |
+| Check for new commits every | no | While Orca is open, checks every so many minutes (0 = never) |
+| Seconds between agents | no | Wait between opening one agent and the next |
+| What to do with git | yes | Fetch and fast-forward the branch · Fetch only, without moving the branch · Don't touch git |
+| Rebase if the branch has diverged | yes | Off by default. If you have local commits and the remote has new ones, `git rebase --no-autostash @{u}`; on a conflict, `git rebase --abort` and the branch stays as it was |
+| Skip if there are uncommitted changes | yes | Pulls nothing if tracked files are modified |
+| All branches, and prune deleted ones | yes | `git fetch --all --prune` |
+| Update submodules | yes | `git submodule update --init --recursive` after moving forward |
+| Report unpushed commits | yes | On by default. Counts the local commits that are not on the remote (`@{u}..HEAD`); read-only |
+| Report on the other worktrees | yes | How many commits each one is behind; doesn't move them |
+| Agent | yes | Claude, Codex, Copilot, Cursor, OpenCode… |
+| What the agent does | yes | Open and wait · Summarize the new commits · Always send my prompt · Resume the last session · Don't open an agent |
+| Only if there are new commits | yes | The agent only opens where commits came in |
+| Startup prompt | yes | Variables: `{project}`, `{branch}`, `{upstream}`, `{n_commits}`, `{commits}` (the Spanish names from earlier versions still work) |
+| Install dependencies when they change | yes | Root lockfiles → `npm install`, `pnpm install`, `yarn install`, `bun install`, `composer install`, `flutter pub get`/`dart pub get`, `bundle install`, `poetry install`, `uv sync` |
+| Install missing dependencies | yes | No `node_modules`, `vendor`, `.dart_tool` or `.venv` → its install, even when git brings nothing |
+| Run each project's commands | yes | When off, none of its commands run |
 
-## Qué no hace nunca
+To keep the agent out of it, set **What the agent does** to *Don't open an agent*; *Open and wait* opens it without sending anything.
 
-- **No mezcla ramas ni hace rebase:** solo avance rápido (`git merge --ff-only --no-autostash @{u}`). Si la rama ha divergido, o si el avance pisaría cambios sin commitear, git se niega y el proyecto queda como estaba.
-- **No toca ramas sin remota.**
-- **No pide credenciales:** si git las necesita, la descarga falla y se informa.
-- **No abre un segundo agente** en un proyecto que ya tiene uno abierto, ni una segunda pestaña de un comando (salvo que pidas reiniciarlo).
-- **No repite el arranque** si el worker del plugin se reinicia con Orca abierto. Solo se ejecuta al abrir Orca de nuevo o tras reiniciar el equipo.
-- **Solo actúa en el checkout principal** de cada proyecto. Los demás worktrees, como mucho, se consultan.
+## What it never does
 
-El prompt se envía en una sola línea: los saltos de línea se convierten en espacios para que el agente no lo reciba a medias.
+- **It doesn't merge branches or rebase, unless you ask for it:** fast-forward only (`git merge --ff-only --no-autostash @{u}`). If the branch has diverged, or if moving forward would overwrite uncommitted changes, git refuses and the project stays as it was. With "Rebase if the branch has diverged" on, a diverged branch is rebased onto the remote; on a conflict it's undone with `git rebase --abort`, and Stop never cuts a rebase halfway.
+- **It doesn't touch branches without an upstream.**
+- **It doesn't ask for credentials:** if git needs them, the fetch fails and it's reported.
+- **It doesn't open a second agent** in a project that already has one open, or a second tab for a command (unless you ask to restart it).
+- **It doesn't repeat the startup** if the plugin's worker restarts while Orca is open. It only runs again when Orca opens again or after restarting the computer.
+- **It only acts on each project's main checkout.** The other worktrees are, at most, queried.
 
-## Cómo funciona
+The prompt is sent as a single line: line breaks become spaces so the agent doesn't get it in pieces.
 
-Orca arranca el worker del plugin en cuanto el plugin está activo (al abrir Orca), porque el manifiesto declara un elemento en la barra de estado. La función `activate` del worker es, por tanto, el momento "al abrir Orca".
+## How it works
 
-| Archivo | Qué hace |
+Orca starts the plugin's worker as soon as the plugin is active (when Orca opens), because the manifest declares a status bar item. The worker's `activate` function is therefore the "when Orca opens" moment.
+
+| File | What it does |
 | --- | --- |
-| `orca-plugin.json` | Manifiesto: panel, comandos, barra de estado, eventos, ajustes y permisos |
-| `src/worker.ts` | Arranque, protección contra repeticiones, perfiles, avance y Detener, historial, revisión periódica, avisos y peticiones del panel |
-| `src/run.ts` | Una ejecución: git, dependencias, preparación, worktrees, agente y pestañas, proyecto a proyecto |
-| `src/commands.ts` | Los comandos de cada proyecto: lectura segura, título de su pestaña y cuándo toca |
-| `src/suggest.ts` | Qué comandos proponer mirando package.json, composer.json, Makefile… |
-| `src/cli.ts` | Lo que va por la CLI de Orca: el agente con modelo, los puertos y el navegador |
-| `src/profiles.ts` | Perfiles: lectura segura, perfil del día y qué mostrar al terminar |
-| `src/transfer.ts` | Exportar e importar, con los proyectos por ruta y nombre |
-| `src/git.ts` | Descargar, avanzar, submódulos y commits por traer |
-| `src/deps.ts` | Qué instalar (lockfiles que cambiaron o dependencias que faltan) y ejecutarlo |
-| `src/settings.ts` | Valores por defecto, validación, herencia por proyecto, campos del panel y variables del prompt |
-| `src/tree.ts` | El árbol de carpetas del panel |
-| `src/describe.ts` | Los textos del panel, la barra de estado y los avisos |
-| `src/panel.tsx` | El panel |
-| `src/protocol.ts` | El contrato entre panel y worker |
+| `orca-plugin.json` | Manifest: panel, commands, status bar, events, settings and permissions |
+| `src/worker.ts` | Startup, protection against repeats, profiles, progress and Stop, history, periodic check, notifications and panel requests |
+| `src/run.ts` | One run: git, dependencies, setup, worktrees, agent and tabs, project by project |
+| `src/commands.ts` | Each project's commands: safe reading, tab title and when they apply |
+| `src/suggest.ts` | Which commands to suggest by looking at package.json, composer.json, Makefile… |
+| `src/cli.ts` | What goes through Orca's CLI: the agent with a model, ports and the browser |
+| `src/profiles.ts` | Profiles: safe reading, the day's profile and what to show when done |
+| `src/transfer.ts` | Export and import, matching projects by path and name |
+| `src/git.ts` | Fetch, fast-forward (or rebase if asked), submodules, commits not applied and unpushed |
+| `src/deps.ts` | What to install (lockfiles that changed or missing dependencies) and running it |
+| `src/settings.ts` | Defaults, validation, per-project inheritance, panel fields and prompt variables |
+| `src/tree.ts` | The panel's folder tree |
+| `src/describe.ts` | The texts of the panel, the status bar and the notifications |
+| `src/panel.tsx` | The panel |
+| `src/protocol.ts` | The contract between panel and worker |
 
-Permisos que pide:
+Permissions it asks for:
 
-| Permiso | Para qué |
+| Permission | What for |
 | --- | --- |
-| `workspace:read` | Ver tus proyectos y workspaces, y enterarse de los que se crean o quitan |
-| `workspace:write` | Mostrar un proyecto al terminar el arranque |
-| `agent:read` | Ver si ya hay un agente abierto |
-| `agent:launch` | Abrir o retomar el agente |
-| `history:read` | Encontrar tu última sesión (solo títulos y fechas, nunca la conversación) |
-| `terminal:send` | Abrir los comandos en sus pestañas, y cerrar las que abrió |
-| `notifications:show` | El aviso al terminar |
-| `storage:own` y `settings:own` | Guardar la selección, los ajustes propios, los resultados y los ajustes |
+| `workspace:read` | See your projects and workspaces, and learn about the ones created or removed |
+| `workspace:write` | Show a project when the startup finishes |
+| `agent:read` | See whether an agent is already open |
+| `agent:launch` | Open or resume the agent |
+| `history:read` | Find your last session (titles and dates only, never the conversation) |
+| `terminal:send` | Open the commands in their tabs, and close the ones it opened |
+| `notifications:show` | The notification when done |
+| `storage:own` and `settings:own` | Save the selection, own settings, results and settings |
 
-El worker corre como proceso de Node con tu usuario (`trusted-worker`): es lo que le permite ejecutar `git` y las instalaciones.
+The worker runs as a Node process under your user (`trusted-worker`): that's what lets it run `git` and the installs.
 
-## Desarrollo
+## Development
 
 ```sh
-orca plugin validate .     # comprueba el manifiesto, sin ejecutar código
-orca plugin test .         # pruebas de src/*.test.ts(x) con orca/testing
-orca plugin check .        # dibuja el panel en cada escenario de src/panel.check.ts
-orca plugin dev load .     # carga esta carpeta en Orca; recarga al guardar
-orca plugin logs local.monstruito   # cargado como carpeta de desarrollo
+orca plugin validate .     # checks the manifest, without running code
+orca plugin test .         # tests in src/*.test.ts(x) with orca/testing
+orca plugin check .        # renders the panel in each scenario of src/panel.check.ts
+orca plugin dev load .     # loads this folder into Orca; reloads on save
+orca plugin logs local.monstruito   # when loaded as a development folder
 ```
 
-`orca plugin test` y `orca plugin check` ejecutan el código del plugin en tu equipo, fuera del sandbox de Orca.
+`orca plugin test` and `orca plugin check` run the plugin's code on your machine, outside Orca's sandbox.
 
-## Créditos
+## Credits
 
-- El icono del panel es el gato de [Lucide](https://lucide.dev), con licencia ISC (© Lucide Icons and Contributors).
+- The panel icon is the cat from [Lucide](https://lucide.dev), under the ISC license (© Lucide Icons and Contributors).

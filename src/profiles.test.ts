@@ -13,7 +13,7 @@ const make = (id: string, extra: Partial<Profile> = {}): Profile => ({
 })
 
 test('sin perfiles guardados crea «Principal» con lo que hubiera marcado', () => {
-  assert.deepEqual(sanitizeProfiles(null, ['a', 'b', 'a']), [make('principal', { name: 'Principal', selection: ['a', 'b'] })])
+  assert.deepEqual(sanitizeProfiles(null, ['a', 'b', 'a']), [make('principal', { name: 'Main', selection: ['a', 'b'] })])
 })
 
 test('limpia perfiles guardados a medias', () => {
@@ -40,15 +40,15 @@ test('el perfil del día manda; si no hay, el activo', () => {
 test('ids legibles y sin repetir', () => {
   assert.equal(newProfileId([], 'Fin de Semana'), 'fin-de-semana')
   assert.equal(newProfileId([make('diseno')], 'Diseño'), 'diseno-2')
-  assert.equal(newProfileId([], '¡¿?!'), 'perfil')
+  assert.equal(newProfileId([], '¡¿?!'), 'profile')
 })
 
 test('los días en palabras', () => {
   assert.equal(describeDays([]), '')
-  assert.equal(describeDays([1, 2, 3, 4, 5]), 'de lunes a viernes')
-  assert.equal(describeDays([6, 0]), 'fines de semana')
-  assert.equal(describeDays([0, 1, 2, 3, 4, 5, 6]), 'todos los días')
-  assert.equal(describeDays([0, 3]), 'miércoles, domingo')
+  assert.equal(describeDays([1, 2, 3, 4, 5]), 'Monday to Friday')
+  assert.equal(describeDays([6, 0]), 'weekends')
+  assert.equal(describeDays([0, 1, 2, 3, 4, 5, 6]), 'every day')
+  assert.equal(describeDays([0, 3]), 'Wednesday, Sunday')
 })
 
 test('qué proyecto mostrar al terminar', () => {

@@ -1,6 +1,6 @@
 // Git sin riesgo: descargar, y como mucho avanzar la rama actual hacia su remota. Nunca mezcla
-// ramas divergentes, nunca hace rebase y nunca guarda ni reaplica cambios locales: si el avance
-// pisaría algo, git se niega y el proyecto queda como estaba.
+// ramas divergentes y nunca guarda ni reaplica cambios locales: si el avance pisaría algo, git se
+// niega y el proyecto queda como estaba. Solo hace rebase si se pide, y si choca lo deshace.
 import { execFile } from 'node:child_process'
 import type { GitOutcome } from './protocol'
 
@@ -41,7 +41,7 @@ export function explain(stderr: string): string {
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean)
-  const line = lines.find((l) => /^(fatal|error):/i.test(l)) ?? lines[0] ?? 'git falló sin decir por qué'
+  const line = lines.find((l) => /^(fatal|error):/i.test(l)) ?? lines[0] ?? 'git failed without saying why'
   return line.length > 200 ? `${line.slice(0, 197)}…` : line
 }
 
@@ -81,7 +81,32 @@ export type SyncOptions = {
   fetchAll: boolean
   skipIfDirty: boolean
   updateSubmodules: boolean
+  /** Si la rama se ha separado de su remota, rebase encima; si choca, `rebase --abort`. */
+  rebaseIfDiverged?: boolean
+  /** Contar los commits locales que no están en la remota. */
+  reportAhead?: boolean
+  /**
+   * Para el rebase y su `--abort`: un git que Detener no corta, porque un rebase cortado a medias
+   * dejaría el proyecto a mitad de camino. Sin él se usa `git`.
+   */
+  steady?: GitRunner
+  /** Se pulsó Detener: lo que no ha empezado (el rebase) ya no empieza. */
+  stopped?: () => boolean
 }
+
+function countOf(result: GitResult): number | null {
+  const total = Number.parseInt(result.stdout.trim(), 10)
+  return result.ok && Number.isFinite(total) ? total : null
+}
+
+/** Commits propios (no están en la remota) y ajenos (no están en la rama); null si git falla. */
+async function divergence(git: GitRunner, cwd: string): Promise<{ ahead: number; behind: number } | null> {
+  const result = await git(cwd, ['rev-list', '--left-right', '--count', 'HEAD...@{u}'])
+  const [ahead, behind] = result.stdout.trim().split(/\s+/).map((part) => Number.parseInt(part, 10))
+  return result.ok && Number.isFinite(ahead) && Number.isFinite(behind) ? { ahead, behind } : null
+}
+
+type Updated = Extract<GitOutcome, { kind: 'updated' }>
 
 /** Descarga y, en modo `pull`, avanza. `changedFiles` son los archivos que cambió el avance. */
 export async function syncProject(
@@ -90,6 +115,20 @@ export async function syncProject(
   options: SyncOptions
 ): Promise<{ outcome: GitOutcome; changedFiles: string[] }> {
   const done = (outcome: GitOutcome, changedFiles: string[] = []) => ({ outcome, changedFiles })
+  /** Como `done`, apuntando antes los commits sin subir, si se piden y hay alguno. */
+  const finish = async (outcome: GitOutcome, changedFiles: string[] = []) => {
+    if (
+      options.reportAhead &&
+      (outcome.kind === 'updated' ||
+        outcome.kind === 'fetched' ||
+        outcome.kind === 'up-to-date' ||
+        (outcome.kind === 'failed' && (outcome.step === 'merge' || outcome.step === 'rebase')))
+    ) {
+      const ahead = countOf(await git(cwd, ['rev-list', '--count', '@{u}..HEAD']))
+      if (ahead) outcome.ahead = ahead
+    }
+    return done(outcome, changedFiles)
+  }
 
   const upstream = await upstreamOf(git, cwd)
   if (!upstream) return done({ kind: 'no-upstream' })
@@ -100,7 +139,7 @@ export async function syncProject(
 
   if (options.mode === 'fetch') {
     const incoming = await commitsIn(git, cwd, 'HEAD..@{u}')
-    return done(
+    return finish(
       incoming.count > 0
         ? { kind: 'fetched', upstream, ...incoming }
         : { kind: 'up-to-date', upstream }
@@ -109,28 +148,54 @@ export async function syncProject(
 
   const before = await git(cwd, ['rev-parse', 'HEAD'])
   if (!before.ok) return done({ kind: 'failed', step: 'git', message: explain(before.stderr) })
+  const from = before.stdout.trim()
+
+  /** Lo común a avanzar y a rebase: commits (si no se contaron ya), archivos y submódulos. */
+  const advanced = async (outcome: Updated, counted: boolean) => {
+    const after = await git(cwd, ['rev-parse', 'HEAD'])
+    if (!after.ok) return done({ kind: 'failed', step: 'git', message: explain(after.stderr) })
+    const to = after.stdout.trim()
+    if (from === to) return finish({ kind: 'up-to-date', upstream })
+    if (!counted) Object.assign(outcome, await commitsIn(git, cwd, `${from}..${to}`))
+    const diff = await git(cwd, ['diff', '--name-only', from, to])
+    if (options.updateSubmodules) {
+      const submodules = await git(cwd, ['submodule', 'update', '--init', '--recursive'], 300_000)
+      outcome.submodules = submodules.ok ? { ok: true } : { ok: false, message: explain(submodules.stderr) }
+    }
+    return finish(outcome, diff.ok ? lines(diff.stdout) : [])
+  }
 
   const merge = await git(cwd, ['merge', '--ff-only', '--no-autostash', '@{u}'])
-  if (!merge.ok) return done({ kind: 'failed', step: 'merge', message: explain(merge.stderr) })
+  if (merge.ok) return advanced({ kind: 'updated', upstream, count: 0, commits: [] }, false)
 
-  const after = await git(cwd, ['rev-parse', 'HEAD'])
-  if (!after.ok) return done({ kind: 'failed', step: 'git', message: explain(after.stderr) })
-
-  const from = before.stdout.trim()
-  const to = after.stdout.trim()
-  if (from === to) return done({ kind: 'up-to-date', upstream })
-
-  const { count, commits } = await commitsIn(git, cwd, `${from}..${to}`)
-  const diff = await git(cwd, ['diff', '--name-only', from, to])
-  const outcome: GitOutcome = { kind: 'updated', upstream, count, commits }
-  if (options.updateSubmodules) {
-    const submodules = await git(cwd, ['submodule', 'update', '--init', '--recursive'], 300_000)
-    outcome.submodules = submodules.ok ? { ok: true } : { ok: false, message: explain(submodules.stderr) }
+  const split = options.rebaseIfDiverged ? await divergence(git, cwd) : null
+  if (!split || split.ahead === 0 || split.behind === 0) {
+    return finish({ kind: 'failed', step: 'merge', message: explain(merge.stderr) })
   }
-  return done(outcome, diff.ok ? lines(diff.stdout) : [])
+
+  // La rama se ha separado. Los commits de la remota se cuentan antes: después del rebase,
+  // `from..to` también incluiría las copias nuevas de los commits locales.
+  const incoming = await commitsIn(git, cwd, 'HEAD..@{u}')
+  if (options.stopped?.()) return done({ kind: 'cancelled' })
+  const steady = options.steady ?? git
+  const rebase = await steady(cwd, ['rebase', '--no-autostash', '--no-autosquash', '@{u}'], 120_000)
+  if (!rebase.ok) {
+    const reason = explain(rebase.stderr || rebase.stdout)
+    const abort = await steady(cwd, ['rebase', '--abort'])
+    // Si el rebase ni empezó (por ejemplo, con cambios sin commitear), no hay nada que deshacer.
+    const undone = abort.ok || /no rebase in progress/i.test(abort.stderr)
+    return finish({
+      kind: 'failed',
+      step: 'rebase',
+      message: undone
+        ? `${reason} Rebase aborted: the branch is as it was.`
+        : `${reason} git rebase --abort failed too (${explain(abort.stderr)}): finish or abort the rebase by hand.`
+    })
+  }
+  return advanced({ kind: 'updated', upstream, ...incoming, rebased: split.ahead }, true)
 }
 
-/** Para la revisión periódica: descarga y cuenta lo que hay por traer, sin mover nada. */
+/** Para la revisión periódica: descarga y cuenta los commits sin aplicar, sin mover nada. */
 export async function checkIncoming(
   git: GitRunner,
   cwd: string,

@@ -71,9 +71,19 @@ test('las variables del prompt', () => {
     commits: ['a1 Uno', 'b2 Dos']
   })
   assert.equal(
-    renderPrompt('{proyecto}@{rama}: {n_commits} de {remota}\n\n  {commits} {otra}', variables),
-    'web@main: 2 de origin/main a1 Uno; b2 Dos {otra}'
+    renderPrompt('{project}@{branch}: {n_commits} from {upstream}\n\n  {commits} {other}', variables),
+    'web@main: 2 from origin/main a1 Uno; b2 Dos {other}'
   )
   const none = promptVariables('web', null, { kind: 'up-to-date', upstream: 'origin/main' })
-  assert.equal(renderPrompt('{n_commits} · {commits} · {remota}', none), '0 · ninguno · origin/main')
+  assert.equal(renderPrompt('{n_commits} · {commits} · {upstream}', none), '0 · none · origin/main')
+})
+
+test('las variables del prompt en español de antes siguen valiendo', () => {
+  const variables = promptVariables('web', 'main', {
+    kind: 'fetched',
+    upstream: 'origin/main',
+    count: 1,
+    commits: ['a1 Uno']
+  })
+  assert.equal(renderPrompt('{proyecto}@{rama} · {remota} · {n_commits}', variables), 'web@main · origin/main · 1')
 })

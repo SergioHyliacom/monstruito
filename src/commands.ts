@@ -110,21 +110,21 @@ export function shouldRun(
   git: GitOutcome,
   changedFiles: string[]
 ): { run: true } | { run: false; reason: string } {
-  if (!command.enabled) return { run: false, reason: 'desactivado' }
+  if (!command.enabled) return { run: false, reason: 'disabled' }
   if (command.when === 'commits') {
     const commits = git.kind === 'updated' || git.kind === 'fetched' ? git.count : 0
-    return commits > 0 ? { run: true } : { run: false, reason: 'sin commits nuevos' }
+    return commits > 0 ? { run: true } : { run: false, reason: 'no new commits' }
   }
   if (command.when === 'files') {
     return matchesFiles(changedFiles, command.files)
       ? { run: true }
-      : { run: false, reason: 'no cambiaron esos archivos' }
+      : { run: false, reason: "those files didn't change" }
   }
   return { run: true }
 }
 
 export function describeWhen(command: CommandDef): string {
-  if (command.when === 'commits') return 'si entran commits'
-  if (command.when === 'files') return command.files.length > 0 ? `si cambia ${command.files.join(', ')}` : 'si cambian archivos (sin indicar)'
-  return 'siempre'
+  if (command.when === 'commits') return 'if new commits come in'
+  if (command.when === 'files') return command.files.length > 0 ? `if ${command.files.join(', ')} changes` : 'if files change (none given)'
+  return 'always'
 }

@@ -58,7 +58,7 @@ export function createOrcaCli(execPath = process.execPath): OrcaCli {
     new Promise((resolve, reject) => {
       const cli = findOrcaCli(execPath, process.env)
       if (!cli) {
-        reject(new Error('No encuentro la CLI de Orca.'))
+        reject(new Error("Can't find the Orca CLI."))
         return
       }
       execFile(cli, args, { timeout: timeoutMs, windowsHide: true }, (error, stdout, stderr) => {
@@ -70,7 +70,7 @@ export function createOrcaCli(execPath = process.execPath): OrcaCli {
           // Sin JSON: manda el código de salida.
         }
         if (!error && parsed?.ok !== false) resolve(parsed?.result ?? null)
-        else reject(new Error(explainCliFailure(out, String(stderr ?? ''), error?.message ?? 'la CLI de Orca falló')))
+        else reject(new Error(explainCliFailure(out, String(stderr ?? ''), error?.message ?? 'the Orca CLI failed')))
       })
     })
 }
@@ -123,7 +123,7 @@ export async function waitForWeb(
   const timeoutMs = options.timeoutMs ?? 120_000
   const intervalMs = options.intervalMs ?? 2000
   for (let waited = 0; waited <= timeoutMs; waited += intervalMs) {
-    if (options.signal?.aborted) throw new Error('detenido')
+    if (options.signal?.aborted) throw new Error('stopped')
     const fresh = (await web.ports(path).catch(() => [])).find((item) => !before.has(item.port))
     if (fresh) {
       const url = fresh.url ?? `http://localhost:${fresh.port}`
@@ -132,5 +132,5 @@ export async function waitForWeb(
     }
     await options.sleep(intervalMs)
   }
-  throw new Error(`No escuchó en ningún puerto nuevo en ${Math.round(timeoutMs / 1000)} s.`)
+  throw new Error(`It did not listen on any new port within ${Math.round(timeoutMs / 1000)} s.`)
 }

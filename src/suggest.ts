@@ -74,7 +74,7 @@ export async function suggestCommands(projectPath: string, read: ReadText, exist
   for (const file of ['compose.yaml', 'compose.yml', 'docker-compose.yml', 'docker-compose.yaml']) {
     if (has(file)) {
       add('docker', 'docker compose up', 'tab', file)
-      add('docker (fondo)', 'docker compose up -d', 'prepare', file)
+      add('docker (background)', 'docker compose up -d', 'prepare', file)
       break
     }
   }

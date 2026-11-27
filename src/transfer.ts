@@ -62,14 +62,14 @@ export function parseExport(text: string): ExportFile {
   try {
     data = JSON.parse(text)
   } catch {
-    throw new Error('No es un JSON válido. Pega el contenido completo del archivo exportado.')
+    throw new Error('This is not valid JSON. Paste the full contents of the exported file.')
   }
   const file = data as Partial<ExportFile> | null
   if (!file || typeof file !== 'object' || (file.format !== 'monstruito' && file.format !== 'orca-arranque')) {
-    throw new Error('No es una exportación de Monstruito.')
+    throw new Error('This is not a Monstruito export.')
   }
-  if (file.version !== 1) throw new Error(`Versión de exportación desconocida: ${String(file.version)}.`)
-  if (!Array.isArray(file.profiles) || file.profiles.length === 0) throw new Error('La exportación no tiene perfiles.')
+  if (file.version !== 1) throw new Error(`Unknown export version: ${String(file.version)}.`)
+  if (!Array.isArray(file.profiles) || file.profiles.length === 0) throw new Error('The export has no profiles.')
   return file as ExportFile
 }
 
@@ -107,7 +107,7 @@ export function applyImport(
 
   const profiles: Profile[] = []
   for (const raw of file.profiles) {
-    const name = typeof raw.name === 'string' && raw.name.trim() ? raw.name.trim().slice(0, 60) : 'Importado'
+    const name = typeof raw.name === 'string' && raw.name.trim() ? raw.name.trim().slice(0, 60) : 'Imported'
     const openAtEnd =
       raw.openAtEnd === '' || raw.openAtEnd === OPEN_RECENT ? raw.openAtEnd : (resolve(raw.openAtEnd) ?? '')
     profiles.push({
