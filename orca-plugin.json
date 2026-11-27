@@ -2,7 +2,7 @@
   "manifestVersion": 2,
   "id": "monstruito",
   "name": "Monstruito",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "When Orca opens, pulls the git changes of the projects you choose and gets each one ready: its agent, its commands and whatever you set up.",
   "icon": "assets/icon.png",
   "cover": {
