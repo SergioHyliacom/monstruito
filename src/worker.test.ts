@@ -4,7 +4,8 @@ import type { JsonValue } from 'orca/worker'
 import type { ModelLaunch, Port } from './cli'
 import type { ShellRunner } from './deps'
 import type { GitResult, GitRunner } from './git'
-import type { PendingCheck, RunRecord } from './protocol'
+import { NEXT_NOTE, notePath, PROPOSED_COMMANDS, READY_NOTE, type NoteFiles } from './notes'
+import type { PendingCheck, RunRecord, WrapRecord } from './protocol'
 import { createActivate, type WorkerDeps } from './worker'
 
 const PATH = 'D:\\Proyectos\\web'
@@ -37,6 +38,8 @@ type RepoOptions = {
   commits?: string[]
   changedFiles?: string[]
   behind?: Record<string, number>
+  /** Commits locales sin subir. */
+  ahead?: number
 }
 
 /** Un repositorio de mentira: `commits` son los que hay en la remota y no en local. */
@@ -59,6 +62,7 @@ function fakeRepo(options: RepoOptions = {}) {
     }
     switch (args[0]) {
       case 'rev-parse':
+        if (args.includes('--git-path')) return ok('.git/info/exclude\n')
         if (args.includes('@{u}')) return options.upstream === false ? fail('fatal: no upstream configured') : ok('origin/main\n')
         return ok(`${head}\n`)
       case 'status':
@@ -70,6 +74,7 @@ function fakeRepo(options: RepoOptions = {}) {
         if (commits.length) head = 'bbb'
         return ok()
       case 'rev-list':
+        if (args[2] === '@{u}..HEAD') return ok(String(options.ahead ?? 0))
         return ok(String(pendingIn(args[2]).length))
       case 'log':
         return ok(pendingIn(args[args.length - 1]).join('\n'))
@@ -84,6 +89,40 @@ function fakeRepo(options: RepoOptions = {}) {
   return { git, calls, callsIn }
 }
 
+/** Archivos de mentira para las notas de `.monstruito/` y la lista de Requests. */
+function fakeFiles() {
+  const files = new Map<string, { text: string; mtime: number }>()
+  const notes: NoteFiles = {
+    read: async (file) => files.get(file)?.text ?? null,
+    mtime: async (file) => files.get(file)?.mtime ?? null,
+    append: async (file, text) => {
+      files.set(file, { text: (files.get(file)?.text ?? '') + text, mtime: 5000 })
+    }
+  }
+  return {
+    notes,
+    files,
+    write: (file: string, text: string, mtime = 6000) => files.set(file, { text, mtime })
+  }
+}
+
+/** Un temporizador que solo avanza cuando la prueba lo pide. */
+function manualTimer() {
+  const active = new Set<() => void>()
+  return {
+    every: (_ms: number, fn: () => void) => {
+      active.add(fn)
+      return () => active.delete(fn)
+    },
+    active,
+    /** Una vuelta de cada temporizador, esperando a que acabe lo que hace. */
+    tick: async () => {
+      for (const fn of [...active]) fn()
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    }
+  }
+}
+
 function setupWorker(
   git: GitRunner,
   host: {
@@ -93,6 +132,8 @@ function setupWorker(
     sessions?: unknown[]
     terminals?: unknown[]
     workspaces?: unknown[]
+    /** Sin «Ejecutar al abrir Orca» guardado, como en una instalación de antes de la pregunta. */
+    noStartupSetting?: boolean
   } = {},
   overrides: Partial<WorkerDeps> = {}
 ) {
@@ -107,9 +148,12 @@ function setupWorker(
     shellCalls.push({ cwd, command })
     return { ok: true, output: '' }
   }
+  const files = fakeFiles()
+  const timer = manualTimer()
   const orca = mockHost({
     storage: host.storage ?? { selection: ['p1'] },
-    settings: { startupDelaySeconds: 0, ...host.settings },
+    // Las pruebas son de antes de la pregunta del primer uso: arrancan al abrir Orca.
+    settings: { startupDelaySeconds: 0, ...(host.noStartupSetting ? {} : { runOnStartup: true }), ...host.settings },
     results: {
       'project.list': { projects: [PROJECT], truncated: false },
       'workspace.list': { workspaces: host.workspaces ?? [WORKSPACE], truncated: false },
@@ -120,7 +164,9 @@ function setupWorker(
       'terminal.list': { terminals: host.terminals ?? [], truncated: false },
       'terminal.create': { terminalId: 't3' },
       'notifications.show': { delivered: true },
-      'statusBar.update': { ok: true }
+      'statusBar.update': { ok: true },
+      'terminal.sendText': { accepted: true },
+      'terminal.close': { closed: true }
     }
   })
   const deps: WorkerDeps = {
@@ -148,10 +194,15 @@ function setupWorker(
     onStartup: (task) => {
       startup = task
     },
+    notes: files.notes,
+    requestsFile: 'requests.json',
+    every: timer.every,
     ...overrides
   }
   return {
     host: orca,
+    files,
+    timer,
     shellCalls,
     sleeps,
     modelLaunches,
@@ -1053,4 +1104,167 @@ test('descarta la última ejecución guardada por la 0.1', async () => {
   const state = await worker.request('state.get')
   assert.equal(state.lastRun, null)
   await worker.deactivate()
+})
+
+// ——— Brief, cierre del día y primer uso ———
+
+const READY_FILE = notePath(PATH, READY_NOTE)
+const NEXT_FILE = notePath(PATH, NEXT_NOTE)
+type Sent = { terminalId: string; text: string; enter: boolean }
+
+test('con brief abre el agente con la rutina, la nota de ayer y Requests, y avisa una vez cuando está listo', async () => {
+  const repo = fakeRepo({ commits: ['bbb Uno'] })
+  const { host, files, timer, mount } = setupWorker(repo.git, { settings: { mode: 'brief' } })
+  files.write(NEXT_FILE, 'Stopped at pricing.\nNext: the header', 1000)
+  files.write(
+    'requests.json',
+    JSON.stringify({
+      threads: [{ id: 't', project: 'web' }],
+      items: [{ id: 'k3fp', thread: 't', title: 'Fix the copy', status: 'need' }]
+    })
+  )
+  const worker = await mount()
+
+  const [launch] = host.callsOf('agent.launch') as { prompt?: string }[]
+  assert.ok(launch.prompt?.includes('Monstruito just prepared web on main: I pulled 1 new commit from origin/main.'))
+  assert.ok(launch.prompt?.includes('Get this project ready'))
+  assert.ok(launch.prompt?.includes('says: "Stopped at pricing. Next: the header"'))
+  assert.ok(launch.prompt?.includes('[k3fp] Fix the copy (needs me)'))
+  assert.ok(launch.prompt?.includes('propose them in .monstruito/commands.json'), 'no tiene comandos')
+  const result = lastRun(host).results[0]
+  assert.deepEqual(result.agent, { kind: 'launched', agent: 'claude', withPrompt: true, brief: true })
+  assert.deepEqual(result.brief, { sentAt: 5000 })
+  const exclude = [...files.files].find(([file]) => file.endsWith('exclude'))
+  assert.ok(exclude?.[1].text.includes('/.monstruito/'), 'git no ve las notas')
+  assert.deepEqual(host.callsOf('notifications.show'), [], 'el aviso espera a que esté listo')
+  const statuses = () => host.callsOf('statusBar.update') as { text?: string }[]
+  assert.equal(statuses()[statuses().length - 1].text, 'Monstruito: 0 of 1 ready')
+  assert.deepEqual((await worker.request('state.get')).ready, {})
+
+  // El agente termina: deja su resumen y propone comandos.
+  files.write(READY_FILE, '# Updated\n- React 19.1\nNext: the mobile header', 7000)
+  files.write(notePath(PATH, PROPOSED_COMMANDS), JSON.stringify([{ name: 'dev', command: 'npm run dev', kind: 'tab' }]))
+  await timer.tick()
+  assert.deepEqual(host.callsOf('notifications.show'), [{ title: 'Monstruito: ready', body: 'web: the mobile header' }])
+  assert.equal(statuses()[statuses().length - 1].text, 'Monstruito: ready')
+  assert.equal(timer.active.size, 0, 'deja de mirar')
+  const state = await worker.request('state.get')
+  assert.equal(state.ready.p1.next, 'the mobile header')
+  assert.equal(state.proposed.p1, 1)
+  const { suggestions } = await worker.request('commands.suggest', { projectId: 'p1' })
+  assert.deepEqual(suggestions[0], { name: 'dev', command: 'npm run dev', kind: 'tab', source: 'Claude' })
+  await worker.deactivate()
+})
+
+test('con brief, a un agente ya abierto y parado se le escribe; si trabaja, no se le toca', async () => {
+  const idle = setupWorker(fakeRepo().git, { settings: { mode: 'brief' }, agents: [CLAUDE_OPEN] })
+  const first = await idle.mount()
+  const [sent] = idle.host.callsOf('terminal.sendText') as Sent[]
+  assert.equal(sent.terminalId, 't9')
+  assert.equal(sent.enter, true)
+  assert.ok(sent.text.includes('Get this project ready'))
+  assert.deepEqual(lastRun(idle.host).results[0].agent, { kind: 'briefed', agent: 'claude' })
+  assert.deepEqual(idle.host.callsOf('agent.launch'), [])
+  await first.deactivate()
+
+  const busy = setupWorker(fakeRepo().git, { settings: { mode: 'brief' }, agents: [{ ...CLAUDE_OPEN, state: 'working' }] })
+  const second = await busy.mount()
+  assert.deepEqual(busy.host.callsOf('terminal.sendText'), [])
+  const result = lastRun(busy.host).results[0]
+  assert.deepEqual(result.agent, { kind: 'already-open', agent: 'claude' })
+  assert.equal(result.brief, undefined)
+  await second.deactivate()
+})
+
+test('el cierre del día pide la nota, cuenta lo pendiente sin tocarlo y cierra agentes y pestañas', async () => {
+  const repo = fakeRepo({ dirty: true, ahead: 2 })
+  const { host, files, mount } = setupWorker(repo.git, {
+    settings: { runOnStartup: false },
+    storage: {
+      selection: ['p1'],
+      openedTerminals: [{ terminalId: 'tab1', title: 'Monstruito: dev', project: 'web', kind: 'command' }]
+    },
+    agents: [CLAUDE_OPEN]
+  })
+  host.respond('terminal.sendText', () => {
+    // El agente escribe su nota en cuanto se la piden.
+    files.write(NEXT_FILE, 'Stopped at pricing.\nNext: the header', 6000)
+    return { accepted: true }
+  })
+  const worker = await mount()
+  const answer = String(await worker.command('monstruito.wrap'))
+
+  const [sent] = host.callsOf('terminal.sendText') as Sent[]
+  assert.equal(sent.terminalId, 't9')
+  assert.ok(sent.text.includes('.monstruito/next.md'))
+  const record = host.data().storage.lastWrap as WrapRecord
+  assert.deepEqual(record.projects, [
+    { projectId: 'p1', name: 'web', note: 'saved', next: 'the header', uncommitted: 1, untracked: 0, unpushed: 2, closed: 2, left: 0 }
+  ])
+  assert.deepEqual(host.callsOf('terminal.close'), [{ terminalId: 't9' }, { terminalId: 'tab1' }])
+  assert.deepEqual(host.data().storage.openedTerminals, [])
+  assert.ok(!repo.calls.some((args) => ['commit', 'push', 'stash', 'reset', 'clean'].includes(args[0])), 'solo mira')
+  assert.ok(answer.includes('web: Note saved · 1 uncommitted file · 2 unpushed commits · Closed 2'))
+  assert.deepEqual(host.callsOf('notifications.show'), [
+    { title: 'Monstruito: wrapped up', body: 'Main · 1 project · 1 with uncommitted work · 1 with unpushed commits' }
+  ])
+  const state = await worker.request('state.get')
+  assert.equal(state.lastWrap?.projects[0].note, 'saved')
+  assert.equal(state.wrapping, false)
+  await worker.deactivate()
+})
+
+test('en el cierre, a un agente que trabaja no se le interrumpe ni se le cierra', async () => {
+  const { host, mount } = setupWorker(fakeRepo().git, {
+    settings: { runOnStartup: false },
+    agents: [{ ...CLAUDE_OPEN, state: 'working' }]
+  })
+  const worker = await mount()
+  await worker.command('monstruito.wrap')
+  assert.deepEqual(host.callsOf('terminal.sendText'), [])
+  assert.deepEqual(host.callsOf('terminal.close'), [])
+  const [result] = (host.data().storage.lastWrap as WrapRecord).projects
+  assert.equal(result.note, 'busy')
+  assert.equal(result.left, 1)
+  assert.equal(result.uncommitted, 0)
+  await worker.deactivate()
+})
+
+test('«Close tabs» cierra las pestañas de comandos y deja los agentes para el cierre del día', async () => {
+  const { host, mount } = setupWorker(fakeRepo().git, {
+    settings: { runOnStartup: false },
+    storage: {
+      selection: ['p1'],
+      openedTerminals: [
+        { terminalId: 'tab1', title: 'Monstruito: dev', project: 'web', kind: 'command' },
+        { terminalId: 't1', title: 'Claude', project: 'web', kind: 'agent' }
+      ]
+    }
+  })
+  const worker = await mount()
+  assert.equal((await worker.request('state.get')).openedTerminals, 1)
+  const state = await worker.request('terminals.closeAll')
+  assert.deepEqual(host.callsOf('terminal.close'), [{ terminalId: 'tab1' }])
+  assert.deepEqual(host.data().storage.openedTerminals, [{ terminalId: 't1', title: 'Claude', project: 'web', kind: 'agent' }])
+  assert.equal(state.openedTerminals, 0)
+  await worker.deactivate()
+})
+
+test('la primera vez pregunta si arrancar al abrir Orca; quien ya lo usaba sigue igual', async () => {
+  const fresh = setupWorker(fakeRepo().git, { storage: {}, noStartupSetting: true })
+  const first = await fresh.mount()
+  assert.equal((await first.request('state.get')).askStartup, true)
+  assert.deepEqual(history(fresh.host), [], 'sin contestar no arranca solo')
+  const answered = await first.request('startup.answer', { runOnStartup: false })
+  assert.equal(answered.askStartup, false)
+  assert.equal(fresh.host.data().settings.runOnStartup, false)
+  await first.deactivate()
+
+  // Quien ya tenía proyectos marcados y nunca tocó el ajuste sigue arrancando al abrir Orca.
+  const existing = setupWorker(fakeRepo().git, { noStartupSetting: true })
+  const second = await existing.mount()
+  assert.equal(existing.host.data().settings.runOnStartup, true)
+  assert.equal(history(existing.host).length, 1)
+  assert.equal((await second.request('state.get')).askStartup, false)
+  await second.deactivate()
 })

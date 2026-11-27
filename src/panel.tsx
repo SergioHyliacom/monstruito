@@ -17,7 +17,7 @@ import {
   plugin,
   Progress as ProgressBar,
   read,
-  RelativeTime,
+  Markdown,
   Row,
   Select,
   Separator,
@@ -39,11 +39,15 @@ import {
   describeAhead,
   describeGitNow,
   describeHistoryEntry,
+  describeReady,
+  describeWrapResult,
+  describeWrapSummary,
   describePlan,
   describeProgress,
   describeStep,
   describeWorktrees,
   pendingHint,
+  timeOf,
   visibleCommands
 } from './describe'
 import { DAYS, describeDays } from './profiles'
@@ -61,7 +65,9 @@ import {
   type ProjectResult,
   type ProjectRow,
   type Progress as RunProgress,
-  type RunRecord
+  type ReadyNote,
+  type RunRecord,
+  type WrapRecord
 } from './protocol'
 import {
   agentLabel,
@@ -103,6 +109,7 @@ const globalTab = atom('globalTab', GLOBAL_GROUPS[0].title, { persist: 'plugin' 
 const projectTab = atom('projectTab', PROJECT_GROUPS[0].title, { persist: 'plugin' })
 /** Si la última ejecución se ve desplegada. Se recuerda entre usos. */
 const lastRunOpen = atom('lastRunOpen', true, { persist: 'plugin' })
+const lastWrapOpen = atom('lastWrapOpen', true, { persist: 'plugin' })
 /** Textos de ajustes mientras se escriben, antes de guardarlos, por `ámbito:clave`. */
 const textDrafts = atom<Record<string, string>>({})
 const profileName = atom<string | null>(null)
@@ -298,6 +305,8 @@ async function saveProject(projectId: string, override: ProjectOverride, command
 }
 
 const closeTerminals = () => ask(() => plugin.request('terminals.closeAll'))
+const wrapNow = () => ask(() => plugin.request('wrap.start'))
+const answerStartup = (runOnStartup: boolean) => ask(() => plugin.request('startup.answer', { runOnStartup }))
 
 async function exportConfig(): Promise<void> {
   try {
@@ -1223,11 +1232,16 @@ function ProjectTreeView({ current }: { current: PanelState }) {
 
 // ——— Resultados, avance e historial ———
 
-/** `behindNow`: solo en la última ejecución, cuántos commits faltan ahora (ver PanelState). */
-function ResultRow({ result, behindNow }: { result: ProjectResult; behindNow?: number }) {
+/** Lo que solo se ve en la última ejecución: cómo está ahora (ver PanelState). */
+type LiveView = { behindNow?: number; ready?: ReadyNote; proposed?: number }
+
+function ResultRow({ result, live = {} }: { result: ProjectResult; live?: LiveView }) {
   const ahead = describeAhead(result.git)
+  // En el historial no se sabe cómo acabó el brief: solo en la última ejecución.
+  const ready = live.behindNow !== undefined || live.ready || live.proposed !== undefined ? describeReady(result, live.ready) : null
   const badges = [
-    describeGitNow(result.git, behindNow),
+    ...(ready ? [ready] : []),
+    describeGitNow(result.git, live.behindNow),
     ...(ahead ? [ahead] : []),
     describeAgent(result.agent),
     ...result.deps.map(describeStep),
@@ -1239,6 +1253,9 @@ function ResultRow({ result, behindNow }: { result: ProjectResult; behindNow?: n
     describeWorktrees(result.worktrees),
     skipped.length > 0
       ? `Skipped: ${skipped.map((command) => `${command.name} (${command.message ?? ''})`).join(', ')}`
+      : undefined,
+    live.proposed
+      ? `The agent proposed ${live.proposed === 1 ? '1 command' : `${live.proposed} commands`}: review them in the project's gear.`
       : undefined
   ].filter(Boolean)
   return (
@@ -1256,11 +1273,19 @@ function ResultRow({ result, behindNow }: { result: ProjectResult; behindNow?: n
           {details.join(' · ')}
         </Text>
       ) : null}
+      {live.ready?.text ? (
+        <Collapsible title="What the agent did" description={`Written ${timeOf(live.ready.at, Date.now())}`}>
+          <Markdown content={live.ready.text} />
+        </Collapsible>
+      ) : null}
     </Stack>
   )
 }
 
-function RunResults({ run, behindNow }: { run: RunRecord; behindNow?: Record<string, number> }) {
+/** Solo la última ejecución trae `now`: cómo está ahora cada proyecto. */
+type RunNow = { behindNow: Record<string, number>; ready: Record<string, ReadyNote>; proposed: Record<string, number> }
+
+function RunResults({ run, now }: { run: RunRecord; now?: RunNow }) {
   return (
     <Stack gap="sm">
       {run.results.length === 0 ? (
@@ -1269,7 +1294,19 @@ function RunResults({ run, behindNow }: { run: RunRecord; behindNow?: Record<str
         </Text>
       ) : (
         run.results.map((result) => (
-          <ResultRow key={result.projectId} result={result} behindNow={behindNow?.[result.projectId]} />
+          <ResultRow
+            key={result.projectId}
+            result={result}
+            live={
+              now
+                ? {
+                    behindNow: now.behindNow[result.projectId],
+                    ready: now.ready[result.projectId],
+                    proposed: now.proposed[result.projectId] ?? 0
+                  }
+                : undefined
+            }
+          />
         ))
       )}
       {run.missing.length > 0 ? (
@@ -1292,7 +1329,7 @@ function RunResults({ run, behindNow }: { run: RunRecord; behindNow?: Record<str
 }
 
 /** Plegada, la última ejecución deja solo su resumen, para que no se confunda con el estado actual. */
-function LastRun({ run, behindNow }: { run: RunRecord; behindNow: Record<string, number> }) {
+function LastRun({ run, now }: { run: RunRecord; now: RunNow }) {
   return (
     <Box border radius="md" padding="xs" background="card">
       <Collapsible
@@ -1304,12 +1341,80 @@ function LastRun({ run, behindNow }: { run: RunRecord; behindNow: Record<string,
         <Stack gap="sm">
           <Text muted size="sm">
             {run.trigger === 'startup' ? 'When Orca opened' : 'Manual'}
-            {run.profile ? ` · ${run.profile}` : ''}, <RelativeTime at={run.finishedAt} />
+            {`${run.profile ? ` · ${run.profile}` : ''} · ${timeOf(run.finishedAt, Date.now())}`}
           </Text>
-          <RunResults run={run} behindNow={behindNow} />
+          <RunResults run={run} now={now} />
         </Stack>
       </Collapsible>
     </Box>
+  )
+}
+
+/** El último cierre del día: la nota para mañana y lo que quedó sin guardar o sin subir. */
+function LastWrap({ record }: { record: WrapRecord }) {
+  return (
+    <Box border radius="md" padding="xs" background="card">
+      <Collapsible
+        title="Last wrap-up"
+        description={describeWrapSummary(record)}
+        open={read(lastWrapOpen)}
+        onChange={(open) => set(lastWrapOpen, open)}
+      >
+        <Stack gap="sm">
+          <Text muted size="sm">
+            {timeOf(record.finishedAt, Date.now())}
+          </Text>
+          {record.projects.map((result) => {
+            const badges = describeWrapResult(result)
+            const details = badges.map((badge) => badge.detail).filter(Boolean)
+            return (
+              <Stack key={result.projectId} gap="xs">
+                <Text weight="medium">{result.name}</Text>
+                <Row gap="xs" wrap>
+                  {badges.map((badge, index) => (
+                    <Badge key={index} tone={badge.tone}>
+                      {badge.text}
+                    </Badge>
+                  ))}
+                </Row>
+                {details.length > 0 ? (
+                  <Text muted size="xs">
+                    {details.join(' · ')}
+                  </Text>
+                ) : null}
+              </Stack>
+            )
+          })}
+          {record.stopped ? (
+            <Text tone="warning" size="sm">
+              Stopped before finishing.
+            </Text>
+          ) : null}
+        </Stack>
+      </Collapsible>
+    </Box>
+  )
+}
+
+/** Primera vez: arrancar al abrir Orca, o solo a mano. */
+function StartupQuestion() {
+  return (
+    <Callout tone="accent" title="Start when Orca opens?">
+      <Stack gap="sm">
+        <Text size="sm">
+          Monstruito can get your selected projects ready every time Orca opens, or only when you press Run now. You can
+          change it later in Settings.
+        </Text>
+        <Row gap="xs" wrap>
+          <Button size="sm" onPress={() => void answerStartup(true)}>
+            When Orca opens
+          </Button>
+          <Button size="sm" variant="outline" onPress={() => void answerStartup(false)}>
+            Only by hand
+          </Button>
+        </Row>
+      </Stack>
+    </Callout>
   )
 }
 
@@ -1357,7 +1462,7 @@ function PendingView({ pending }: { pending: PendingCheck }) {
           </Text>
         ))}
         <Text muted size="xs">
-          Checked <RelativeTime at={pending.checkedAt} />. {pendingHint(pending.projects, 'panel')}
+          {`Checked ${timeOf(pending.checkedAt, Date.now())}. ${pendingHint(pending.projects, 'panel')}`}
         </Text>
       </Stack>
     </Callout>
@@ -1412,7 +1517,7 @@ export default function Panel() {
     (project) => project.selected && (current.commands[project.id]?.length ?? 0) > 0
   ).length
   const live = read(progress)
-  const busy = current.running || current.checking || live !== null
+  const busy = current.running || current.checking || current.wrapping || live !== null
 
   return (
     <Stack gap="md">
@@ -1425,12 +1530,22 @@ export default function Panel() {
         {describePlan(current.settings, selectedCount, withCommands)}
       </Text>
       {error ? <Callout tone="danger">{error}</Callout> : null}
+      {current.askStartup ? <StartupQuestion /> : null}
       <Row gap="xs" align="center" wrap>
         <Button icon="play" disabled={busy || selectedCount === 0} onPress={runNow}>
           Run now
         </Button>
         <Button icon="download" variant="outline" disabled={busy || selectedCount === 0} onPress={checkNow}>
           Check commits
+        </Button>
+        <Button
+          icon="flag"
+          variant="outline"
+          disabled={busy || selectedCount === 0}
+          tooltip="Asks each agent for a note for tomorrow, reports uncommitted and unpushed work, and closes agents and tabs"
+          onPress={wrapNow}
+        >
+          Wrap up
         </Button>
         {busy ? (
           <Button icon="stop" variant="ghost" tone="danger" disabled={live?.stopping === true} onPress={stopNow}>
@@ -1450,7 +1565,15 @@ export default function Panel() {
       </Row>
       {live ? <ProgressView value={live} /> : null}
       {current.pending ? <PendingView pending={current.pending} /> : null}
-      {current.lastRun ? <LastRun run={current.lastRun} behindNow={current.behindNow ?? {}} /> : null}
+      {current.lastRun ? (
+        <LastRun
+          run={current.lastRun}
+          now={{ behindNow: current.behindNow ?? {}, ready: current.ready ?? {}, proposed: current.proposed ?? {} }}
+        />
+      ) : null}
+      {current.lastWrap && current.lastWrap.finishedAt > (current.lastRun?.finishedAt ?? 0) ? (
+        <LastWrap record={current.lastWrap} />
+      ) : null}
       <HistoryView history={current.history} />
       <Separator />
       <Row gap="xs" align="center">

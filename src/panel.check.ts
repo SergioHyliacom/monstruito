@@ -70,8 +70,8 @@ export default defineCheck({
       },
       lastRun: {
         trigger: 'startup',
-        startedAt: 1,
-        finishedAt: 2,
+        startedAt: Date.now() - 2 * 60 * 60 * 1000 - 90_000,
+        finishedAt: Date.now() - 2 * 60 * 60 * 1000,
         missing: [],
         results: [
           {

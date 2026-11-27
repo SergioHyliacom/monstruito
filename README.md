@@ -4,16 +4,16 @@
 
 <h1 align="center">Monstruito</h1>
 
-An [Orca](https://github.com/stablyai/orca) plugin that gets your projects ready when Orca opens. In every project you select, in this order:
+An [Orca](https://github.com/stablyai/orca) plugin that gets your projects ready to work on, and wraps up the day when you finish. In every project you select, in this order:
 
 1. **Git**: pulls the current branch's changes, or only fetches them, or leaves git alone.
 2. **Dependencies**: if moving forward changed a lockfile, or if they are missing (a fresh clone), installs them and waits for it to finish.
 3. **Setup commands**: the project's background commands (`docker compose up -d`, migrations…), waiting for each one.
 4. **Worktrees**: if you ask for it, tells how many commits each of the other worktrees is behind.
-5. **Agent**: opens Claude (or another agent) the way you choose.
+5. **Agent**: opens Claude (or another agent) the way you choose. With the **brief**, the agent finishes the job: it upgrades dependencies, fixes what failed and tells you the next item (see [Brief and wrap-up](#brief-and-wrap-up)).
 6. **Tab commands**: the project's long-running commands (`npm run dev`…), each in its own tab, and if you want it opens their web page in Orca's browser.
 
-When it finishes it can show you a project to start working there.
+When it finishes it can show you a project to start working there. At the end of the day, **Wrap up** asks each agent for a note for tomorrow, reports what is not committed or pushed, and closes agents and tabs.
 
 ## Install
 
@@ -25,6 +25,8 @@ Monstruito runs code on your machine (git, installs, commands), so Orca asks you
 
 Requires Orca 1.4.274 or later.
 
+The first time you open the panel it asks whether to start when Orca opens or only by hand.
+
 ## Usage
 
 In the **Monstruito** panel (cat icon):
@@ -33,12 +35,13 @@ In the **Monstruito** panel (cat icon):
 - **Choosing projects:** tick the boxes in the tree. It goes by folders, from most to least recent according to your activity in Orca; folders collapse and the open ones are remembered. **Select all N** selects a whole folder. Selected projects move to a separate list at the top.
 - **Run now:** does the same as when Orca opens, with the chosen profile. While it runs, the panel shows which project is at which step.
 - **Check commits:** fetches and counts the commits not applied, without moving anything or opening agents.
+- **Wrap up:** the end-of-day routine (see [Brief and wrap-up](#brief-and-wrap-up)).
 - **Stop:** stops what is running. What's done stays; what's left doesn't start.
-- **History:** the last run and, collapsed, the 9 before it.
+- **History:** the last run and, collapsed, the 9 before it. The last run follows what you do afterwards: commits you pull by hand stop showing as not applied, and with the brief each project shows **Ready** and its next item once the agent is done.
 - **Reload projects** (↻): asks Orca for the projects again and clears the search. The panel also updates on its own when Orca reports that a workspace was created or removed.
 - **Settings** (⚙): those of all profiles or of the chosen profile, plus export and import.
 - **A project's settings and commands:** the gear next to it.
-- **Close tabs (N):** closes at once the command tabs Monstruito opened.
+- **Close tabs (N):** closes at once the command tabs Monstruito opened. Agents stay open: **Wrap up** closes them after their note.
 
 ## Commands
 
@@ -48,13 +51,36 @@ Each project has its own list of commands, in its gear, **Commands** tab. They a
 - **When:** always, only when commits come in, or only when certain files change. Files are relative to the project root, separated by commas: `folder/` is everything inside, and `*` (within a folder) and `**` (at any depth) work. For example `database/migrations/` for `php artisan migrate`.
 - **Restart if already open:** closes its tab and opens it again. It only works with the tabs Monstruito opened.
 - **Open the web page when it's ready:** before opening the tab it looks at the workspace's ports; then it waits (up to 2 minutes) for a new one and opens its address in Orca's browser, in the background, without moving you from where you are.
-- **Suggestions:** when you open the gear it suggests commands based on the project: scripts from `package.json` (with npm, pnpm, yarn or bun depending on the lockfile) and `composer.json`, Laravel (`artisan`), docker compose, Makefile, Flutter, Django, Cargo and Go. One click adds them.
+- **Suggestions:** when you open the gear it suggests commands based on the project. First the ones the agent proposed during a brief (marked *Claude*), then the ones from fixed rules: scripts from `package.json` (with npm, pnpm, yarn or bun depending on the lockfile) and `composer.json`, Laravel (`artisan`), docker compose, Makefile, Flutter, Django, Cargo and Go. One click adds them; nothing runs until you add it.
 
 A command tab is called "Monstruito: name" (or the command, if it has no name); that's how it knows whether it's already open.
 
 The status bar shows the summary of the last run or check. Clicking it runs the startup.
 
 By default no project is selected, so installing it does nothing until you choose.
+
+## Brief and wrap-up
+
+The routine above is mechanical. The brief and the wrap-up hand the rest to the agent, and make a loop from one day to the next.
+
+**Start.** Set **What the agent does** to *Get the project ready (brief)*. After git, dependencies and setup commands, Monstruito sends each project's agent one brief:
+
+1. Upgrade the dependencies within their declared ranges, design systems, fonts and UI libraries included, run the project's checks, and roll back any upgrade that breaks something.
+2. Update the plugins the project uses.
+3. Clean up only what tools regenerate (caches, build output).
+4. Fix what failed in the routine.
+5. Find the next item: from yesterday's wrap-up note first, then the open requests of the [Requests](https://github.com/sydneydesign/requests) plugin for that project, then branches, TODOs and recent commits.
+6. If the project has no commands in Monstruito yet, propose them, without running them.
+
+The brief tells the agent never to delete your files, commit, push, reset or stash without asking. If the agent is already open and idle, the brief goes to it; if it is working, it is left alone. Each agent writes `.monstruito/ready.md` when it is done. The panel shows **Ready** and the next item per project, and you get one notification when every project is ready (or after 90 minutes). With the brief, that notification replaces the usual one at the end of the run.
+
+**Wrap up.** At the end of the day, **Wrap up** goes through the selected projects:
+
+1. It asks each idle agent to write `.monstruito/next.md`: where you stopped and what comes next. An agent that is working is not interrupted.
+2. It reports uncommitted files, new files and unpushed commits. It only looks: it never commits or pushes.
+3. It closes the agents that wrote their note and the command tabs Monstruito opened. Orca only lets a plugin close the terminals it opened, or the ones in the workspace on screen, so others stay open and are counted.
+
+The next brief reads that note. Both notes live in `.monstruito/` in each project, which Monstruito adds to the repository's local exclude file (`.git/info/exclude`), so git never sees them and they are never committed.
 
 ## Profiles
 
@@ -81,7 +107,7 @@ All of them can be changed in a profile. The column says which ones can also be 
 
 | Setting | Per project | What it does |
 | --- | --- | --- |
-| Run when Orca opens | no | When off, it only runs by hand |
+| Run when Orca opens | no | Off by default; the panel asks the first time. When off, it only runs by hand |
 | Delay when Orca opens | no | Seconds Orca gets to load before starting |
 | Projects at a time | no | How many projects are processed in parallel |
 | Notify when done | no | Notification with the summary, and when the periodic check finds new commits |
@@ -95,9 +121,9 @@ All of them can be changed in a profile. The column says which ones can also be 
 | Report unpushed commits | yes | On by default. Counts the local commits that are not on the remote (`@{u}..HEAD`); read-only |
 | Report on the other worktrees | yes | How many commits each one is behind; doesn't move them |
 | Agent | yes | Claude, Codex, Copilot, Cursor, OpenCode… |
-| What the agent does | yes | Open and wait · Summarize the new commits · Always send my prompt · Resume the last session · Don't open an agent |
+| What the agent does | yes | Open and wait · Summarize the new commits · Always send my prompt · Resume the last session · Get the project ready (brief) · Don't open an agent |
 | Only if there are new commits | yes | The agent only opens where commits came in |
-| Startup prompt | yes | Variables: `{project}`, `{branch}`, `{upstream}`, `{n_commits}`, `{commits}` (the Spanish names from earlier versions still work) |
+| Startup prompt | yes | Variables: `{project}`, `{branch}`, `{upstream}`, `{n_commits}`, `{commits}` (the Spanish names from earlier versions still work). With the brief, it is added as extra instructions |
 | Install dependencies when they change | yes | Root lockfiles → `npm install`, `pnpm install`, `yarn install`, `bun install`, `composer install`, `flutter pub get`/`dart pub get`, `bundle install`, `poetry install`, `uv sync` |
 | Install missing dependencies | yes | No `node_modules`, `vendor`, `.dart_tool` or `.venv` → its install, even when git brings nothing |
 | Run each project's commands | yes | When off, none of its commands run |
@@ -106,10 +132,11 @@ To keep the agent out of it, set **What the agent does** to *Don't open an agent
 
 ## What it never does
 
+- **It never commits or pushes.** Neither the run nor the wrap-up does, and the brief tells the agent to ask you before committing, pushing, deleting, resetting or stashing. With the brief, the agent does upgrade dependencies, so lockfiles change.
 - **It doesn't merge branches or rebase, unless you ask for it:** fast-forward only (`git merge --ff-only --no-autostash @{u}`). If the branch has diverged, or if moving forward would overwrite uncommitted changes, git refuses and the project stays as it was. With "Rebase if the branch has diverged" on, a diverged branch is rebased onto the remote; on a conflict it's undone with `git rebase --abort`, and Stop never cuts a rebase halfway.
 - **It doesn't touch branches without an upstream.**
 - **It doesn't ask for credentials:** if git needs them, the fetch fails and it's reported.
-- **It doesn't open a second agent** in a project that already has one open, or a second tab for a command (unless you ask to restart it).
+- **It doesn't open a second agent** in a project that already has one open, or a second tab for a command (unless you ask to restart it). It never writes to an agent that is working.
 - **It doesn't repeat the startup** if the plugin's worker restarts while Orca is open. It only runs again when Orca opens again or after restarting the computer.
 - **It only acts on each project's main checkout.** The other worktrees are, at most, queried.
 
@@ -129,7 +156,9 @@ Orca starts the plugin's worker as soon as the plugin is active (when Orca opens
 | `src/cli.ts` | What goes through Orca's CLI: the agent with a model, ports and the browser |
 | `src/profiles.ts` | Profiles: safe reading, the day's profile and what to show when done |
 | `src/transfer.ts` | Export and import, matching projects by path and name |
-| `src/git.ts` | Fetch, fast-forward (or rebase if asked), submodules, commits not applied and unpushed |
+| `src/git.ts` | Fetch, fast-forward (or rebase if asked), submodules, commits not applied and unpushed, uncommitted work |
+| `src/brief.ts` | The brief sent to the agent, and the wrap-up request |
+| `src/notes.ts` | The agent's notes in `.monstruito/`, their local git exclude, proposed commands and the Requests list |
 | `src/deps.ts` | What to install (lockfiles that changed or missing dependencies) and running it |
 | `src/settings.ts` | Defaults, validation, per-project inheritance, panel fields and prompt variables |
 | `src/tree.ts` | The panel's folder tree |
@@ -146,7 +175,7 @@ Permissions it asks for:
 | `agent:read` | See whether an agent is already open |
 | `agent:launch` | Open or resume the agent |
 | `history:read` | Find your last session (titles and dates only, never the conversation) |
-| `terminal:send` | Open the commands in their tabs, and close the ones it opened |
+| `terminal:send` | Open the commands in their tabs and close the ones it opened, and send the brief or the wrap-up request to an agent that is already open and idle |
 | `notifications:show` | The notification when done |
 | `storage:own` and `settings:own` | Save the selection, own settings, results and settings |
 

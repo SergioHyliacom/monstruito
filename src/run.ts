@@ -2,6 +2,7 @@
 // comandos de preparación → demás worktrees → agente → comandos en pestaña → abrir la web.
 import type { HostMethods } from 'orca/host'
 import type { OrcaWorkerApi } from 'orca/worker'
+import { buildBrief, failuresOf } from './brief'
 import { waitForWeb, type ModelLauncher, type WebOpener } from './cli'
 import { commandLabel, commandTitle, shouldRun } from './commands'
 import {
@@ -14,6 +15,7 @@ import {
   type ShellRunner
 } from './deps'
 import { behindCount, syncProject, type GitRunner } from './git'
+import { excludeNotes, openRequests, readNextNote, type NoteFiles } from './notes'
 import type {
   AgentOutcome,
   CommandDef,
@@ -28,6 +30,7 @@ import type {
 import {
   DEFAULT_SUMMARY_FETCHED,
   DEFAULT_SUMMARY_UPDATED,
+  agentLabel,
   effectiveSettings,
   modelSupport,
   promptVariables,
@@ -59,9 +62,16 @@ export type RunDeps = {
   exists?: Exists
   /** Para «Abrir la web»: puertos del workspace y navegador de Orca. */
   web?: WebOpener
-  /** Cada pestaña de comando que se abre, para poder cerrarlas luego todas. */
-  terminalOpened?: (terminal: { terminalId: string; title: string; project: string }) => void
+  /** Cada pestaña de comando o agente que se abre, para poder cerrarlas luego. */
+  terminalOpened?: (terminal: OpenedTerminal) => void
+  /** Para el brief: las notas de `.monstruito/` y la lista de Requests. */
+  notes?: NoteFiles
+  requestsFile?: string
+  now?: () => number
 }
+
+/** Un terminal que abrió Monstruito: una pestaña de comando o un agente. */
+export type OpenedTerminal = { terminalId: string; title: string; project: string; kind?: 'command' | 'agent' }
 
 /** Un comando de preparación se corta a los 15 minutos, como una instalación. */
 const PREPARE_TIMEOUT = 15 * 60_000
@@ -157,21 +167,32 @@ export function buildPrompt(settings: ProjectSettings, git: GitOutcome, project:
   return undefined
 }
 
+/** Un agente que espera o ha terminado: se le puede escribir sin interrumpirle. */
+const IDLE = new Set(['waiting', 'done'])
+
 async function startAgent(
-  host: Host,
+  deps: RunDeps,
   workspace: Workspace,
   project: Project,
   settings: ProjectSettings,
   git: GitOutcome,
   gate: Gate,
-  launchWithModel: ModelLauncher | undefined
+  brief: string | undefined
 ): Promise<AgentOutcome> {
+  const { host, launchWithModel } = deps
   if (settings.mode === 'none') return { kind: 'disabled' }
   if (settings.onlyWithCommits && newCommits(git) === 0) return { kind: 'no-commits' }
   const agent = settings.agent
 
   const { agents } = await host.call('agents.list', { workspaceId: workspace.id })
-  if (agents.some((open) => open.agent === agent)) return { kind: 'already-open', agent }
+  const open = agents.filter((item) => item.agent === agent)
+  if (open.length > 0) {
+    // Con brief, al que ya está abierto y sin trabajar se le escribe; al que trabaja no se le interrumpe.
+    const idle = brief ? open.find((item) => item.terminalId && IDLE.has(item.state)) : undefined
+    if (!idle?.terminalId || !brief) return { kind: 'already-open', agent }
+    const sent = await gate(() => host.call('terminal.sendText', { terminalId: idle.terminalId!, text: brief, enter: true }))
+    return sent.accepted ? { kind: 'briefed', agent } : { kind: 'already-open', agent }
+  }
 
   if (settings.mode === 'resume' && RESUMABLE.has(agent)) {
     const { sessions } = await host.call('agent.listSessions', { workspaceId: workspace.id, limit: 20 })
@@ -191,7 +212,7 @@ async function startAgent(
     // Sin sesiones anteriores: se abre uno nuevo.
   }
 
-  const prompt = buildPrompt(settings, git, project.name, shortBranch(workspace.branch))
+  const prompt = brief ?? buildPrompt(settings, git, project.name, shortBranch(workspace.branch))
   const support = modelSupport(agent)
   const model = settings.model.trim()
   if (model && support && launchWithModel) {
@@ -205,12 +226,44 @@ async function startAgent(
         prompt
       })
     )
-    return { kind: 'launched', agent, withPrompt: prompt !== undefined, model }
+    return { kind: 'launched', agent, withPrompt: prompt !== undefined, model, ...(brief ? { brief: true } : {}) }
   }
-  await gate(() =>
+  const { terminalId } = await gate(() =>
     host.call('agent.launch', prompt ? { workspaceId: workspace.id, agent, prompt } : { workspaceId: workspace.id, agent })
   )
-  return { kind: 'launched', agent, withPrompt: prompt !== undefined }
+  // Para el cierre del día: Orca deja cerrar los terminales que abrió el plugin.
+  deps.terminalOpened?.({ terminalId, title: agentLabel(agent), project: project.name, kind: 'agent' })
+  return { kind: 'launched', agent, withPrompt: prompt !== undefined, ...(brief ? { brief: true } : {}) }
+}
+
+/** El brief de un proyecto: la rutina que acaba de pasar, su nota de ayer y lo abierto en Requests. */
+async function prepareBrief(
+  deps: RunDeps,
+  project: Project,
+  workspace: Workspace,
+  settings: ProjectSettings,
+  result: ProjectResult,
+  hasCommands: boolean
+): Promise<string> {
+  const notes = deps.notes
+  // Que git no vea las notas del agente; sin git no hace falta.
+  if (notes && project.kind === 'git') await excludeNotes(deps.git, notes, project.path).catch(() => false)
+  const [note, requests] = notes
+    ? await Promise.all([
+        readNextNote(notes, project.path).catch(() => null),
+        deps.requestsFile ? openRequests(notes, deps.requestsFile, project.name).catch(() => []) : []
+      ])
+    : [null, []]
+  return buildBrief({
+    project: project.name,
+    branch: shortBranch(workspace.branch),
+    git: result.git,
+    failures: failuresOf(result),
+    note,
+    requests,
+    proposeCommands: !hasCommands,
+    extra: settings.prompt
+  })
 }
 
 /**
@@ -247,7 +300,7 @@ async function openCommandTab(
     }
     await beforeOpen()
     const { terminalId } = await deps.host.call('terminal.create', { workspaceId, title, command: command.command })
-    deps.terminalOpened?.({ terminalId, title, project: project.name })
+    deps.terminalOpened?.({ terminalId, title, project: project.name, kind: 'command' })
     return { name, kind: 'tab', result: open.length > 0 ? 'restarted' : 'opened' }
   } catch (error) {
     return { name, kind: 'tab', result: 'failed', message: errorMessage(error) }
@@ -370,11 +423,19 @@ async function runProject(
   }
 
   step('agent')
-  result.agent = main
-    ? await startAgent(deps.host, main, project, settings, result.git, gate, deps.launchWithModel).catch(
-        (error): AgentOutcome => ({ kind: 'failed', message: errorMessage(error) })
-      )
-    : { kind: 'no-workspace' }
+  if (main) {
+    const brief =
+      settings.mode === 'brief' ? await prepareBrief(deps, project, main, settings, result, commands.length > 0) : undefined
+    const sentAt = (deps.now ?? Date.now)()
+    result.agent = await startAgent(deps, main, project, settings, result.git, gate, brief).catch(
+      (error): AgentOutcome => ({ kind: 'failed', message: errorMessage(error) })
+    )
+    if (result.agent.kind === 'briefed' || (result.agent.kind === 'launched' && result.agent.brief)) {
+      result.brief = { sentAt }
+    }
+  } else {
+    result.agent = { kind: 'no-workspace' }
+  }
   if (stopped()) return cancelled()
 
   for (const command of tabs) {

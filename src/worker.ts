@@ -12,8 +12,30 @@ import type { JsonValue, OrcaWorkerApi } from 'orca/worker'
 import { createModelLauncher, createOrcaCli, createWebOpener, type ModelLauncher, type WebOpener } from './cli'
 import { commandsFromLegacy, sanitizeCommandMap, sanitizeCommands } from './commands'
 import { readText as readTextFromDisk, runShell, type Exists, type ReadText, type ShellRunner } from './deps'
-import { describeRun, notificationFor, statusFor, statusForPending } from './describe'
-import { behindCount, checkIncoming, runGit, type GitRunner } from './git'
+import { WRAP_PROMPT } from './brief'
+import {
+  describeRun,
+  describeWrapRun,
+  notificationFor,
+  notificationForReady,
+  notificationForWrap,
+  statusFor,
+  statusForPending,
+  statusForReady,
+  statusForWrap
+} from './describe'
+import { aheadCount, behindCount, checkIncoming, runGit, workingChanges, type GitRunner } from './git'
+import {
+  diskFiles,
+  excludeNotes,
+  NEXT_NOTE,
+  nextItem,
+  notePath,
+  readProposedCommands,
+  readReady,
+  requestsFile,
+  type NoteFiles
+} from './notes'
 import { emptyProfile, findProfile, newProfileId, profileForDay, projectToOpen, sanitizeProfiles } from './profiles'
 import { suggestCommands } from './suggest'
 import type {
@@ -25,7 +47,10 @@ import type {
   ProfilePatch,
   Progress,
   ProjectOverride,
-  RunRecord
+  ReadyNote,
+  RunRecord,
+  WrapRecord,
+  WrapResult
 } from './protocol'
 import {
   errorMessage,
@@ -34,6 +59,7 @@ import {
   mapLimit,
   normalizePath,
   runProjects,
+  type OpenedTerminal,
   type Project
 } from './run'
 import {
@@ -58,7 +84,18 @@ const PENDING = 'pending'
 const SESSION = 'session'
 const IMPORT_BACKUP = 'importBackup'
 const STATUS = 'status'
+const LAST_WRAP = 'lastWrap'
+/** Ya se contestó (o no hacía falta) «¿arrancar al abrir Orca?». */
+const STARTUP_ASKED = 'startupAsked'
 const HISTORY_SIZE = 10
+/** Cuánto se espera a que los agentes acaben el brief, y cada cuánto se mira. */
+const READY_WAIT_MS = 90 * 60_000
+const READY_POLL_MS = 20_000
+/** Cuánto se espera la nota de cierre de cada agente, y cada cuánto se mira. */
+const NOTE_WAIT_MS = 3 * 60_000
+const NOTE_POLL_MS = 5_000
+/** Un agente que espera o ha terminado: se le puede escribir o cerrar sin cortarle a medias. */
+const IDLE = new Set(['waiting', 'done'])
 
 export type WorkerDeps = {
   git: GitRunner
@@ -79,6 +116,12 @@ export type WorkerDeps = {
   projectWait: { attempts: number; intervalMs: number }
   /** Las pruebas esperan aquí a que termine lo que se hace al abrir Orca. */
   onStartup?: (task: Promise<void>) => void
+  /** Las notas de `.monstruito/` de cada proyecto. */
+  notes: NoteFiles
+  /** La lista del plugin Requests, para el brief. */
+  requestsFile: string
+  /** Repite `fn` cada `ms` hasta que se llame a lo que devuelve. */
+  every: (ms: number, fn: () => void) => () => void
 }
 
 type StatusUpdate = {
@@ -95,8 +138,6 @@ type Backup = {
   commands?: Record<string, CommandDef[]>
   settings: GlobalSettings
 }
-
-type OpenedTerminal = { terminalId: string; title: string; project: string }
 
 function asStrings(value: JsonValue | null): string[] {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : []
@@ -120,6 +161,8 @@ export function createActivate(deps: WorkerDeps) {
   return function activate(orca: OrcaWorkerApi): void {
     let running = false
     let checking = false
+    let wrapping = false
+    let stopReadyWatch: (() => void) | null = null
     let progress: Progress | null = null
     let controller: AbortController | null = null
     let recheckTimer: ReturnType<typeof setInterval> | null = null
@@ -165,6 +208,35 @@ export function createActivate(deps: WorkerDeps) {
       if (Array.isArray(stored)) return stored.filter(isRunRecord)
       const legacy = await orca.storage.get(LEGACY_LAST_RUN)
       return isRunRecord(legacy) ? [legacy] : []
+    }
+
+    async function readWrap(): Promise<WrapRecord | null> {
+      const value = await orca.storage.get(LAST_WRAP)
+      return value && typeof value === 'object' && !Array.isArray(value) ? (value as unknown as WrapRecord) : null
+    }
+
+    /** El resumen de cada proyecto al que se mandó el brief, si ya lo escribió. */
+    async function readyNow(record: RunRecord | null): Promise<Record<string, ReadyNote>> {
+      const entries = await Promise.all(
+        (record?.results ?? []).flatMap((result) =>
+          result.brief
+            ? [readReady(deps.notes, result.path, result.brief.sentAt).then((note) => [result.projectId, note] as const, () => null)]
+            : []
+        )
+      )
+      return Object.fromEntries(entries.filter((entry): entry is readonly [string, ReadyNote] => entry?.[1] != null))
+    }
+
+    /** Cuántos comandos propuso el agente en cada proyecto que aún no tiene ninguno. */
+    async function proposedNow(record: RunRecord | null, commands: Record<string, CommandDef[]>): Promise<Record<string, number>> {
+      const entries = await Promise.all(
+        (record?.results ?? []).flatMap((result) =>
+          result.brief && !commands[result.projectId]?.length
+            ? [readProposedCommands(deps.notes, result.path).then((list) => [result.projectId, list.length] as const, () => null)]
+            : []
+        )
+      )
+      return Object.fromEntries(entries.filter((entry): entry is readonly [string, number] => !!entry && entry[1] > 0))
     }
 
     async function readPending(): Promise<PendingCheck | null> {
@@ -230,19 +302,27 @@ export function createActivate(deps: WorkerDeps) {
     }
 
     async function state(): Promise<PanelState> {
-      const [base, active, overrides, history, storedPending, projects, lastUsed, backup, commands, opened] = await Promise.all([
-        readBase(),
-        readActive(),
-        readOverrides(),
-        readHistory(),
-        readPending(),
-        listLocalProjects(orca.host),
-        readLastUsed(),
-        orca.storage.get(IMPORT_BACKUP),
-        readCommands(),
-        readOpened()
+      const [base, active, overrides, history, storedPending, projects, lastUsed, backup, commands, opened, lastWrap, asked] =
+        await Promise.all([
+          readBase(),
+          readActive(),
+          readOverrides(),
+          readHistory(),
+          readPending(),
+          listLocalProjects(orca.host),
+          readLastUsed(),
+          orca.storage.get(IMPORT_BACKUP),
+          readCommands(),
+          readOpened(),
+          readWrap(),
+          orca.storage.get(STARTUP_ASKED)
+        ])
+      const lastRun = history[0] ?? null
+      const [behindNow, ready, proposed] = await Promise.all([
+        currentBehind(lastRun, storedPending, projects),
+        readyNow(lastRun),
+        proposedNow(lastRun, commands)
       ])
-      const behindNow = await currentBehind(history[0] ?? null, storedPending, projects)
       const pending = await refreshPending(storedPending, behindNow)
       const chosen = new Set(active.profile.selection)
       return {
@@ -252,14 +332,19 @@ export function createActivate(deps: WorkerDeps) {
         activeProfileId: active.profile.id,
         overrides,
         commands,
-        openedTerminals: opened.length,
+        openedTerminals: opened.filter((terminal) => terminal.kind !== 'agent').length,
         running,
         checking,
         progress,
         history,
-        lastRun: history[0] ?? null,
+        lastRun,
         pending,
         behindNow,
+        ready,
+        proposed,
+        lastWrap,
+        wrapping,
+        askStartup: asked !== true,
         canUndoImport: backup !== null,
         projects: projects.map((project) => ({
           id: project.id,
@@ -380,7 +465,7 @@ export function createActivate(deps: WorkerDeps) {
 
     async function run(trigger: RunRecord['trigger']): Promise<RunRecord | null> {
       // Sin `await` antes de esto: quien llama ve `running` a true nada más volver.
-      if (running || checking) return null
+      if (running || checking || wrapping) return null
       running = true
       const signal = beginProgress('run')
       const startedAt = deps.now()
@@ -411,6 +496,9 @@ export function createActivate(deps: WorkerDeps) {
             exists: deps.exists,
             web: deps.web,
             terminalOpened: (terminal) => void rememberTerminal(terminal),
+            notes: deps.notes,
+            requestsFile: deps.requestsFile,
+            now: deps.now,
             log,
             sleep: deps.sleep,
             signal,
@@ -433,10 +521,16 @@ export function createActivate(deps: WorkerDeps) {
         const history = [record, ...(await readHistory())].slice(0, HISTORY_SIZE)
         await orca.storage.set(HISTORY, asJson(history))
         await orca.storage.delete(PENDING)
-        await setStatus(statusFor(record))
-        if (global.notifyOnFinish && results.length > 0) {
-          const message = notificationFor(record)
-          await notify(message.title, message.body)
+        if (results.some((result) => result.brief)) {
+          // Con brief, el aviso espera a que los agentes dejen listo cada proyecto: un solo resumen al final.
+          await setStatus(statusForReady(record, {}))
+          watchReady(record, global.notifyOnFinish)
+        } else {
+          await setStatus(statusFor(record))
+          if (global.notifyOnFinish && results.length > 0) {
+            const message = notificationFor(record)
+            await notify(message.title, message.body)
+          }
         }
         return record
       } catch (error) {
@@ -450,9 +544,49 @@ export function createActivate(deps: WorkerDeps) {
       }
     }
 
+    /**
+     * Después de mandar el brief, mira cada poco si los agentes han escrito su resumen. Cuando lo
+     * han hecho todos, o pasado el tiempo, avisa una sola vez con lo que sigue en cada proyecto.
+     */
+    function watchReady(record: RunRecord, notifyAtEnd: boolean): void {
+      stopReadyWatch?.()
+      const total = record.results.filter((result) => result.brief).length
+      const deadline = record.finishedAt + READY_WAIT_MS
+      let seen = 0
+      let busy = false
+      const cancel = deps.every(READY_POLL_MS, () => void tick())
+      stopReadyWatch = cancel
+      async function tick(): Promise<void> {
+        if (busy || stopReadyWatch !== cancel) return
+        busy = true
+        try {
+          const ready = await readyNow(record)
+          const count = Object.keys(ready).length
+          const finished = count >= total || deps.now() >= deadline
+          if (count !== seen || finished) {
+            seen = count
+            await setStatus(statusForReady(record, ready))
+            await broadcast()
+          }
+          if (finished) {
+            cancel()
+            stopReadyWatch = null
+            if (notifyAtEnd) {
+              const message = notificationForReady(record, ready)
+              await notify(message.title, message.body)
+            }
+          }
+        } catch (error) {
+          log(`Could not check whether the projects are ready: ${errorMessage(error)}`)
+        } finally {
+          busy = false
+        }
+      }
+    }
+
     /** Descarga y cuenta los commits sin aplicar de los proyectos marcados, sin mover nada. */
     async function recheck(): Promise<PendingCheck | null> {
-      if (running || checking) return null
+      if (running || checking || wrapping) return null
       checking = true
       const signal = beginProgress('check')
       void broadcast()
@@ -524,6 +658,173 @@ export function createActivate(deps: WorkerDeps) {
       }
     }
 
+    /**
+     * El cierre de un proyecto: pide al agente la nota para mañana (solo si no está trabajando),
+     * cuenta lo que queda sin commitear o sin subir (sin tocarlo) y cierra lo que se puede cerrar.
+     */
+    async function wrapProject(
+      project: Project,
+      workspaces: { id: string; projectId?: string | null; path: string }[],
+      opened: OpenedTerminal[],
+      closedIds: Set<string>,
+      signal: AbortSignal
+    ): Promise<WrapResult> {
+      const result: WrapResult = {
+        projectId: project.id,
+        name: project.name,
+        note: 'no-agent',
+        uncommitted: null,
+        untracked: null,
+        unpushed: null,
+        closed: 0,
+        left: 0
+      }
+      const main = workspaces.find(
+        (row) => row.projectId === project.id && normalizePath(row.path) === normalizePath(project.path)
+      )
+      const listAgents = async () =>
+        main ? (await orca.host.call('agents.list', { workspaceId: main.id })).agents.filter((agent) => agent.terminalId) : []
+      const noteFile = notePath(project.path, NEXT_NOTE)
+
+      // 1. La nota para mañana, del agente que no está trabajando.
+      let agents = await listAgents().catch(() => [])
+      const idle = agents.find((agent) => IDLE.has(agent.state))
+      if (agents.length > 0 && !idle) result.note = 'busy'
+      if (idle && signal.aborted) result.note = 'cancelled'
+      if (idle && !signal.aborted) {
+        progressHooks.report(project, 'note')
+        try {
+          if (project.kind === 'git') await excludeNotes(deps.git, deps.notes, project.path).catch(() => false)
+          const askedAt = deps.now()
+          const sent = await orca.host.call('terminal.sendText', { terminalId: idle.terminalId!, text: WRAP_PROMPT, enter: true })
+          result.note = sent.accepted ? 'timeout' : 'failed'
+          if (!sent.accepted) result.message = 'The agent did not take the request.'
+          for (let waited = 0; sent.accepted && waited < NOTE_WAIT_MS && !signal.aborted; waited += NOTE_POLL_MS) {
+            await deps.sleep(NOTE_POLL_MS)
+            const at = await deps.notes.mtime(noteFile)
+            if (at !== null && at >= askedAt) {
+              result.note = 'saved'
+              result.next = nextItem((await deps.notes.read(noteFile)) ?? '')
+              break
+            }
+          }
+          if (result.note === 'timeout' && signal.aborted) result.note = 'cancelled'
+          // Que acabe de contestar antes de cerrarlo.
+          for (let tries = 0; result.note === 'saved' && tries < 6; tries++) {
+            agents = await listAgents().catch(() => agents)
+            if (agents.every((agent) => IDLE.has(agent.state))) break
+            await deps.sleep(NOTE_POLL_MS)
+          }
+        } catch (error) {
+          result.note = 'failed'
+          result.message = errorMessage(error)
+        }
+      }
+
+      // 2. Lo que queda sin guardar o sin subir. Solo se mira: nunca se commitea ni se sube nada.
+      if (project.kind === 'git') {
+        progressHooks.report(project, 'unsaved')
+        const changes = await workingChanges(deps.git, project.path).catch(() => null)
+        result.uncommitted = changes?.uncommitted ?? null
+        result.untracked = changes?.untracked ?? null
+        result.unpushed = await aheadCount(deps.git, project.path).catch(() => null)
+      }
+      if (signal.aborted) return result
+
+      // 3. Cerrar: los agentes, solo si dejaron la nota; las pestañas de comandos, siempre.
+      progressHooks.report(project, 'closing')
+      const closable = result.note === 'saved' ? agents.filter((agent) => IDLE.has(agent.state)) : []
+      result.left = agents.length - closable.length
+      for (const agent of closable) {
+        try {
+          await orca.host.call('terminal.close', { terminalId: agent.terminalId! })
+          closedIds.add(agent.terminalId!)
+          result.closed++
+        } catch {
+          // Orca solo deja cerrar los que abrió el plugin o los del workspace a la vista.
+          result.left++
+        }
+      }
+      const open = new Set(agents.map((agent) => agent.terminalId))
+      for (const terminal of opened.filter((item) => item.project === project.name)) {
+        if (terminal.kind === 'agent') {
+          // Los agentes que ya no están abiertos dejan de estar apuntados.
+          if (!open.has(terminal.terminalId)) closedIds.add(terminal.terminalId)
+          continue
+        }
+        const closed = await orca.host.call('terminal.close', { terminalId: terminal.terminalId }).then(
+          () => true,
+          () => false
+        )
+        // Si falla es que ya estaba cerrada: deja de estar apuntada igual.
+        closedIds.add(terminal.terminalId)
+        if (closed) result.closed++
+      }
+      return result
+    }
+
+    /** El cierre del día de los proyectos marcados: nota para mañana, lo pendiente y cerrar. */
+    async function wrap(): Promise<WrapRecord | null> {
+      if (running || checking || wrapping) return null
+      wrapping = true
+      const signal = beginProgress('wrap')
+      const startedAt = deps.now()
+      void setStatus({
+        text: 'Monstruito: wrapping up…',
+        icon: 'refresh',
+        tone: 'accent',
+        tooltip: 'Asking each agent for a note for tomorrow, then closing what can be closed'
+      })
+      void broadcast()
+      try {
+        await openedWrites
+        const [base, active, projects, opened] = await Promise.all([
+          readBase(),
+          readActive(),
+          listLocalProjects(orca.host),
+          readOpened()
+        ])
+        const global = resolveSettings(base, active.profile.settings)
+        const byId = new Map(projects.map((project) => [project.id, project]))
+        const chosen = active.profile.selection.flatMap((id) => byId.get(id) ?? [])
+        const { workspaces } = await orca.host.call('workspace.list')
+        progressHooks.started(chosen)
+        const closedIds = new Set<string>()
+        const results = await mapLimit(chosen, global.concurrency, async (project) => {
+          try {
+            return await wrapProject(project, workspaces, opened, closedIds, signal)
+          } finally {
+            progressHooks.report(project, 'done')
+          }
+        })
+        await openedWrites
+        const remaining = (await readOpened()).filter((terminal) => !closedIds.has(terminal.terminalId))
+        await orca.storage.set(OPENED, asJson(remaining))
+        const record: WrapRecord = {
+          startedAt,
+          finishedAt: deps.now(),
+          profile: active.profile.name,
+          projects: results,
+          ...(signal.aborted ? { stopped: true } : {})
+        }
+        await orca.storage.set(LAST_WRAP, asJson(record))
+        await setStatus(statusForWrap(record))
+        if (global.notifyOnFinish && results.length > 0) {
+          const message = notificationForWrap(record)
+          await notify(message.title, message.body)
+        }
+        return record
+      } catch (error) {
+        log(`The wrap-up failed: ${errorMessage(error)}`)
+        await setStatus({ text: 'Monstruito: error', icon: 'error', tone: 'danger', tooltip: errorMessage(error) })
+        return null
+      } finally {
+        wrapping = false
+        endProgress()
+        await broadcast()
+      }
+    }
+
     function scheduleRecheck(minutes: number): void {
       if (minutes === recheckEvery) return
       recheckEvery = minutes
@@ -548,7 +849,24 @@ export function createActivate(deps: WorkerDeps) {
       return previous.parentPid === deps.parentPid && typeof previous.at === 'number' && previous.at > deps.bootTime
     }
 
+    /**
+     * «Ejecutar al abrir Orca» viene apagado y el panel lo pregunta la primera vez. Quien ya usaba
+     * Monstruito no ve la pregunta y sigue como estaba (si nunca lo cambió, encendido).
+     */
+    async function settleStartupQuestion(): Promise<void> {
+      if ((await orca.storage.get(STARTUP_ASKED)) === true) return
+      const [profiles, legacy, history] = await Promise.all([
+        orca.storage.get(PROFILES),
+        orca.storage.get(LEGACY_SELECTION),
+        orca.storage.get(HISTORY)
+      ])
+      if (profiles === null && legacy === null && history === null) return
+      if ((await orca.settings.get()).runOnStartup === undefined) await orca.settings.set('runOnStartup', true)
+      await orca.storage.set(STARTUP_ASKED, true)
+    }
+
     async function startup(): Promise<void> {
+      await settleStartupQuestion()
       if (isSameOrcaSession(await orca.storage.get(SESSION))) {
         await refreshSchedule()
         log('The worker restarted while Orca was open: not repeating the startup run.')
@@ -636,16 +954,24 @@ export function createActivate(deps: WorkerDeps) {
     orca.panels.handle('commands.suggest', async ({ projectId }) => {
       const project = (await listLocalProjects(orca.host)).find((item) => item.id === projectId)
       if (!project) return { suggestions: [] }
-      return { suggestions: await suggestCommands(project.path, deps.readText, deps.exists) }
+      // Primero lo que propuso el agente; las reglas fijas quedan detrás, sin repetir.
+      const [proposed, rules] = await Promise.all([
+        readProposedCommands(deps.notes, project.path).catch(() => []),
+        suggestCommands(project.path, deps.readText, deps.exists)
+      ])
+      const seen = new Set(proposed.map((suggestion) => suggestion.command))
+      return { suggestions: [...proposed, ...rules.filter((suggestion) => !seen.has(suggestion.command))] }
     })
 
     orca.panels.handle('terminals.closeAll', async () => {
       await openedWrites
-      for (const terminal of await readOpened()) {
+      const opened = await readOpened()
+      // Solo las pestañas de comandos: los agentes se cierran con el cierre del día, tras su nota.
+      for (const terminal of opened.filter((item) => item.kind !== 'agent')) {
         // Las que ya se cerraron a mano, o de una sesión anterior de Orca, fallan: no importa.
         await orca.host.call('terminal.close', { terminalId: terminal.terminalId }).catch(() => undefined)
       }
-      await orca.storage.set(OPENED, [])
+      await orca.storage.set(OPENED, asJson(opened.filter((item) => item.kind === 'agent')))
       return answer()
     })
 
@@ -662,6 +988,17 @@ export function createActivate(deps: WorkerDeps) {
     orca.panels.handle('run.stop', () => {
       stop()
       return state()
+    })
+
+    orca.panels.handle('wrap.start', () => {
+      void wrap()
+      return state()
+    })
+
+    orca.panels.handle('startup.answer', async ({ runOnStartup }) => {
+      await orca.settings.set('runOnStartup', runOnStartup)
+      await orca.storage.set(STARTUP_ASKED, true)
+      return answer()
     })
 
     orca.panels.handle('profile.select', async ({ profileId }) => {
@@ -803,6 +1140,11 @@ export function createActivate(deps: WorkerDeps) {
       return statusForPending(pending).tooltip
     })
 
+    orca.commands.register('monstruito.wrap', async () => {
+      const record = await wrap()
+      return record ? describeWrapRun(record) : 'A run, a check or a wrap-up is already in progress.'
+    })
+
     orca.commands.register('monstruito.stop', () => (stop() ? 'Stopping…' : 'Nothing is running.'))
 
     orca.settings.onDidChange(() => {
@@ -832,5 +1174,13 @@ export default createActivate({
   bootTime: Date.now() - os.uptime() * 1000,
   now: () => Date.now(),
   sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
-  projectWait: { attempts: 12, intervalMs: 5000 }
+  projectWait: { attempts: 12, intervalMs: 5000 },
+  notes: diskFiles,
+  requestsFile: requestsFile(),
+  every: (ms, fn) => {
+    const timer = setInterval(fn, ms)
+    // Que el temporizador no mantenga vivo el proceso por sí solo.
+    ;(timer as { unref?: () => void }).unref?.()
+    return () => clearInterval(timer)
+  }
 })

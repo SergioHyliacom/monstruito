@@ -10,7 +10,7 @@ import type {
 } from './protocol'
 
 export const DEFAULT_SETTINGS: GlobalSettings = {
-  runOnStartup: true,
+  runOnStartup: false,
   startupDelaySeconds: 4,
   concurrency: 4,
   notifyOnFinish: true,
@@ -112,6 +112,7 @@ const AGENT_MODES: { value: AgentMode; label: string }[] = [
   { value: 'summarize', label: 'Summarize the new commits' },
   { value: 'prompt', label: 'Always send my prompt' },
   { value: 'resume', label: 'Resume the last session' },
+  { value: 'brief', label: 'Get the project ready (brief)' },
   { value: 'none', label: "Don't open an agent" }
 ]
 
@@ -146,7 +147,7 @@ export type FieldDef =
 
 export type FieldGroup = { title: string; fields: FieldDef[] }
 
-export const PROMPT_HELP = 'Variables: {project}, {branch}, {upstream}, {n_commits}, {commits}.'
+export const PROMPT_HELP = 'Variables: {project}, {branch}, {upstream}, {n_commits}, {commits}. With the brief, it is added as extra instructions.'
 
 export const GLOBAL_GROUPS: FieldGroup[] = [
   {

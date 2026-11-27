@@ -1,5 +1,5 @@
 import { assert, test } from 'orca/testing'
-import { describeAhead, describeGit, describeGitNow } from './describe'
+import { describeAhead, describeGit, describeGitNow, timeOf } from './describe'
 
 test('los commits sin subir salen en su propia etiqueta, solo si hay alguno', () => {
   assert.deepEqual(describeAhead({ kind: 'up-to-date', upstream: 'origin/main', ahead: 1 }), {
@@ -32,4 +32,11 @@ test('la etiqueta de la última ejecución sigue a la rama: aplicados a mano o c
     detail: 'The 7 commits this run left unapplied are in your branch now.'
   })
   assert.equal(describeGitNow({ kind: 'up-to-date', upstream: 'origin/main' }, 0).text, 'Up to date')
+})
+
+test('la hora sale en inglés y sin caducar, sea cual sea el idioma de Orca', () => {
+  const now = new Date(2026, 10, 27, 18, 30).getTime()
+  assert.equal(timeOf(new Date(2026, 10, 27, 9, 5).getTime(), now), 'today at 09:05')
+  assert.equal(timeOf(new Date(2026, 10, 26, 18, 4).getTime(), now), 'yesterday at 18:04')
+  assert.equal(timeOf(new Date(2026, 10, 20, 7, 0).getTime(), now), '20 Nov at 07:00')
 })

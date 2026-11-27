@@ -3,7 +3,7 @@
   "id": "monstruito",
   "name": "Monstruito",
   "version": "0.6.0",
-  "description": "When Orca opens, pulls the git changes of the projects you choose and gets each one ready: its agent, its commands and whatever you set up.",
+  "description": "Gets the projects you choose ready to work on: pulls git, installs dependencies, opens each one's agent and commands, and can brief the agent to finish the job. Wraps up the day with a note for tomorrow.",
   "icon": "assets/icon.png",
   "cover": {
     "path": "assets/cover.png",
@@ -38,6 +38,10 @@
         "title": "Monstruito: check for new commits"
       },
       {
+        "id": "monstruito.wrap",
+        "title": "Monstruito: wrap up the day"
+      },
+      {
         "id": "monstruito.stop",
         "title": "Monstruito: stop what is running"
       }
@@ -63,9 +67,9 @@
       {
         "key": "runOnStartup",
         "title": "Run when Orca opens",
-        "description": "When off, it only runs from the panel button or the status bar.",
+        "description": "When off, it only runs from the panel button or the status bar. The panel asks the first time.",
         "type": "boolean",
-        "default": true
+        "default": false
       },
       {
         "key": "startupDelaySeconds",
@@ -225,6 +229,7 @@
           "summarize",
           "prompt",
           "resume",
+          "brief",
           "none"
         ],
         "enumLabels": [
@@ -232,6 +237,7 @@
           "Summarize the new commits",
           "Always send my prompt",
           "Resume the last session",
+          "Get the project ready (brief)",
           "Don't open an agent"
         ],
         "default": "wait"
@@ -245,7 +251,7 @@
       {
         "key": "prompt",
         "title": "Startup prompt",
-        "description": "For \"Summarize\" (replaces the default summary) and \"Always send my prompt\". Variables: {project}, {branch}, {upstream}, {n_commits}, {commits}.",
+        "description": "For \"Summarize\" (replaces the default summary) and \"Always send my prompt\". Variables: {project}, {branch}, {upstream}, {n_commits}, {commits}. With the brief, it is added as extra instructions.",
         "type": "string",
         "multiline": true,
         "maxLength": 4000,

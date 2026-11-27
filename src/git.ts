@@ -209,6 +209,24 @@ export async function checkIncoming(
   return { upstream, count }
 }
 
+/** Commits locales que no están en la remota; null si la rama no sigue a ninguna. Solo lee. */
+export async function aheadCount(git: GitRunner, cwd: string): Promise<number | null> {
+  if (!(await upstreamOf(git, cwd))) return null
+  return countOf(await git(cwd, ['rev-list', '--count', '@{u}..HEAD']))
+}
+
+/** Archivos versionados con cambios y archivos nuevos sin versionar; null si git falla. Solo lee. */
+export async function workingChanges(
+  git: GitRunner,
+  cwd: string
+): Promise<{ uncommitted: number; untracked: number } | null> {
+  const result = await git(cwd, ['status', '--porcelain'])
+  if (!result.ok) return null
+  const changed = lines(result.stdout)
+  const untracked = changed.filter((line) => line.startsWith('??')).length
+  return { uncommitted: changed.length - untracked, untracked }
+}
+
 /** Cuántos commits va por detrás de su remota un worktree; null si no sigue a ninguna. */
 export async function behindCount(git: GitRunner, cwd: string): Promise<number | null> {
   if (!(await upstreamOf(git, cwd))) return null

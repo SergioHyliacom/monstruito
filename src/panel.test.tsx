@@ -1,7 +1,7 @@
 // `orca plugin test .` lo ejecuta en Node con el mismo runtime y las mismas comprobaciones de Orca.
 import { assert, mockHost, mount, test } from 'orca/testing'
 import * as panel from './panel'
-import type { CommandDef, PanelState, Profile, ProjectOverride, ProjectRow, RunRecord } from './protocol'
+import type { CommandDef, PanelState, Profile, ProjectOverride, ProjectRow, RunRecord, WrapRecord } from './protocol'
 import { DEFAULT_SETTINGS } from './settings'
 
 const HOUR = 60 * 60 * 1000
@@ -30,6 +30,11 @@ function panelState(overrides: Partial<PanelState> = {}): PanelState {
     lastRun: null,
     pending: null,
     behindNow: {},
+    ready: {},
+    proposed: {},
+    lastWrap: null,
+    wrapping: false,
+    askStartup: false,
     profiles: [PRINCIPAL],
     activeProfileId: 'principal',
     baseSettings: DEFAULT_SETTINGS,
@@ -696,5 +701,99 @@ test('sin ningún proyecto marcado no deja ejecutar ni revisar', async () => {
   const view = await mount(panel, { host })
   assert.equal(view.find({ text: 'Run now' })?.disabled, true)
   assert.equal(view.find({ text: 'Check commits' })?.disabled, true)
+  await view.unmount()
+})
+
+// ——— Brief, cierre del día y primer uso ———
+
+test('la primera vez pregunta si arrancar al abrir Orca', async () => {
+  const answers: boolean[] = []
+  const host = mockHost({
+    requests: {
+      'state.get': () => panelState({ askStartup: true }),
+      'startup.answer': (input) => {
+        answers.push(input.runOnStartup)
+        return panelState({ askStartup: false })
+      }
+    }
+  })
+  const view = await mount(panel, { host })
+  assert.ok(view.find({ text: /every time Orca opens, or only when you press Run now/ }))
+  await view.press({ text: 'Only by hand' })
+  assert.deepEqual(answers, [false])
+  assert.equal(view.find({ text: 'Only by hand' }), null, 'contestada, desaparece')
+  assert.deepEqual(view.errors, [])
+  await view.unmount()
+})
+
+test('con brief, la última ejecución dice si cada proyecto está listo y qué sigue', async () => {
+  const result = (projectId: string, sentAt: number): RunRecord['results'][number] => ({
+    projectId,
+    name: projectId,
+    path: `D:/Proyectos/${projectId}`,
+    git: { kind: 'up-to-date', upstream: 'origin/main' },
+    agent: { kind: 'launched', agent: 'claude', withPrompt: true, brief: true },
+    deps: [],
+    commands: [],
+    worktrees: [],
+    brief: { sentAt }
+  })
+  const run = runRecord({ finishedAt: Date.now(), results: [result('web', 1), result('api', 1)] })
+  const host = mockHost({
+    requests: {
+      'state.get': () =>
+        panelState({
+          history: [run],
+          lastRun: run,
+          ready: { web: { at: Date.now(), next: 'the mobile header', text: '# Updated\n- React 19.1\n\nNext: the mobile header' } },
+          proposed: { web: 2 }
+        })
+    }
+  })
+  const view = await mount(panel, { host })
+  assert.ok(view.find({ text: 'Ready' }))
+  assert.ok(view.find({ text: 'Getting ready…' }), 'api aún no ha terminado')
+  assert.ok(view.find({ text: /Next: the mobile header/ }))
+  assert.ok(view.find({ text: /The agent proposed 2 commands: review them in the project's gear\./ }))
+  assert.ok(view.find({ text: 'Claude got the brief' }))
+  assert.ok(view.find({ type: 'Collapsible', label: 'What the agent did' }))
+  assert.deepEqual(view.errors, [])
+  await view.unmount()
+})
+
+test('«Wrap up» empieza el cierre y su resultado sale después de la última ejecución', async () => {
+  const wrap: WrapRecord = {
+    startedAt: 3,
+    finishedAt: 4,
+    profile: 'Principal',
+    projects: [
+      { projectId: 'api', name: 'api', note: 'saved', next: 'pricing', uncommitted: 2, untracked: 0, unpushed: 1, closed: 2, left: 0 },
+      { projectId: 'web', name: 'web', note: 'busy', uncommitted: 0, untracked: 0, unpushed: 0, closed: 0, left: 1 }
+    ]
+  }
+  let started = 0
+  const host = mockHost({
+    requests: {
+      'state.get': () => panelState({ lastRun: runRecord(), history: [runRecord()], lastWrap: wrap }),
+      'wrap.start': () => {
+        started++
+        return panelState({ wrapping: true })
+      }
+    }
+  })
+  const view = await mount(panel, { host })
+  const box = view.find({ type: 'Collapsible', label: 'Last wrap-up' })
+  assert.equal(box?.props.description, 'Principal · 2 projects · 1 with uncommitted work · 1 with unpushed commits')
+  assert.ok(view.find({ text: 'Note saved' }))
+  assert.ok(view.find({ text: '2 uncommitted files' }))
+  assert.ok(view.find({ text: '1 unpushed commit' }))
+  assert.ok(view.find({ text: 'Agent busy: no note' }))
+  assert.ok(view.find({ text: 'All committed and pushed' }))
+  assert.ok(view.find({ text: /Next: pricing/ }))
+
+  await view.press({ text: 'Wrap up' })
+  assert.equal(started, 1)
+  assert.equal(view.find({ text: 'Run now' })?.disabled, true, 'mientras cierra no se puede ejecutar')
+  assert.deepEqual(view.errors, [])
   await view.unmount()
 })

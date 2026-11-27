@@ -9,9 +9,12 @@ import type {
   Progress,
   ProgressStep,
   ProjectResult,
+  ReadyNote,
   RunRecord,
   StepOutcome,
-  WorktreeStatus
+  WorktreeStatus,
+  WrapRecord,
+  WrapResult
 } from './protocol'
 import { agentLabel, modelLabel } from './settings'
 
@@ -106,8 +109,15 @@ export function describeAgent(agent: AgentOutcome): Described {
       const name = agent.model
         ? `${agentLabel(agent.agent)} (${modelLabel(agent.agent, agent.model)})`
         : agentLabel(agent.agent)
+      if (agent.brief) return { text: `${name} got the brief`, tone: 'success' }
       return { text: agent.withPrompt ? `${name} with prompt` : `${name} opened`, tone: 'success' }
     }
+    case 'briefed':
+      return {
+        text: `${agentLabel(agent.agent)} got the brief`,
+        tone: 'success',
+        detail: 'It was already open and idle, so the brief went to it.'
+      }
     case 'resumed':
       return { text: 'Session resumed', tone: 'success', detail: agent.title }
     case 'already-open':
@@ -137,11 +147,20 @@ const STEP_TEXT: Record<ProgressStep, string> = {
   worktrees: 'checking worktrees',
   agent: 'opening the agent',
   command: 'opening its commands',
-  web: 'waiting for the web page to be ready'
+  web: 'waiting for the web page to be ready',
+  note: "waiting for the agent's note",
+  unsaved: 'looking for uncommitted and unpushed work',
+  closing: 'closing agents and tabs'
+}
+
+const PROGRESS_TITLE: Record<Progress['kind'], string> = {
+  run: 'Starting',
+  check: 'Checking commits',
+  wrap: 'Wrapping up'
 }
 
 export function describeProgress(progress: Progress): { title: string; lines: string[]; percent: number } {
-  const what = progress.kind === 'run' ? 'Starting' : 'Checking commits'
+  const what = PROGRESS_TITLE[progress.kind] ?? 'Working'
   const title = progress.stopping
     ? 'Stopping…'
     : `${what}: ${progress.done} of ${plural(progress.total, 'project', 'projects')}`
@@ -159,6 +178,21 @@ const dateFormat = new Intl.DateTimeFormat('en-GB', {
   hour: '2-digit',
   minute: '2-digit'
 })
+
+const clock = new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit' })
+const shortDay = new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short' })
+
+/**
+ * Cuándo pasó algo, en inglés pase lo que pase con el idioma de Orca: «today at 09:12»,
+ * «yesterday at 18:04» o «27 Nov at 09:12». No caduca, así que no hace falta refrescarlo.
+ */
+export function timeOf(at: number, now: number): string {
+  const day = (time: number) => new Date(time).toDateString()
+  const yesterday = new Date(now)
+  yesterday.setDate(yesterday.getDate() - 1)
+  const date = day(at) === day(now) ? 'today' : day(at) === yesterday.toDateString() ? 'yesterday' : shortDay.format(new Date(at))
+  return `${date} at ${clock.format(new Date(at))}`
+}
 
 /** Título y resumen de una ejecución del historial. */
 export function describeHistoryEntry(run: RunRecord): { title: string; summary: string } {
@@ -321,6 +355,137 @@ export function statusForPending(pending: PendingCheck): {
     : { text: 'Monstruito: up to date', icon: 'check', tone: 'success', tooltip: lines.join('\n') }
 }
 
+// ——— Brief: proyectos que el agente deja listos ———
+
+/** Cómo va el brief de un proyecto: listo con lo que sigue, o aún trabajando. */
+export function describeReady(result: ProjectResult, ready: ReadyNote | undefined): Described | null {
+  if (!result.brief) return null
+  if (!ready) {
+    return { text: 'Getting ready…', tone: 'accent', detail: 'The agent is working through the brief.' }
+  }
+  return { text: 'Ready', tone: 'success', detail: ready.next ? `Next: ${ready.next}` : undefined }
+}
+
+const briefed = (run: RunRecord) => run.results.filter((result) => result.brief)
+
+export function statusForReady(
+  run: RunRecord,
+  ready: Record<string, ReadyNote>
+): { text: string; icon: 'refresh' | 'check' | 'warning'; tone: 'accent' | 'success' | 'warning'; tooltip: string } {
+  const projects = briefed(run)
+  const done = projects.filter((result) => ready[result.projectId])
+  const lines = projects.map((result) => {
+    const note = ready[result.projectId]
+    if (!note) return `${result.name}: getting ready…`
+    return note.next ? `${result.name}: next, ${note.next}` : `${result.name}: ready`
+  })
+  const problems = run.results.filter(isProblem).length
+  if (problems > 0) lines.push(`${plural(problems, 'project', 'projects')} with problems in the run.`)
+  if (done.length < projects.length) {
+    return { text: `Monstruito: ${done.length} of ${projects.length} ready`, icon: 'refresh', tone: 'accent', tooltip: lines.join('\n') }
+  }
+  return problems > 0
+    ? { text: 'Monstruito: ready, with problems', icon: 'warning', tone: 'warning', tooltip: lines.join('\n') }
+    : { text: 'Monstruito: ready', icon: 'check', tone: 'success', tooltip: lines.join('\n') }
+}
+
+/** El único aviso de una ejecución con brief: cuando todos están listos, o se acabó la espera. */
+export function notificationForReady(run: RunRecord, ready: Record<string, ReadyNote>): { title: string; body: string } {
+  const projects = briefed(run)
+  const done = projects.filter((result) => ready[result.projectId]).length
+  const lines = projects.map((result) => {
+    const note = ready[result.projectId]
+    if (!note) return `${result.name}: not ready yet`
+    return note.next ? `${result.name}: ${note.next}` : `${result.name}: ready`
+  })
+  const problems = run.results.filter(isProblem)
+  if (problems.length > 0) lines.push(`Problems: ${problems.map((result) => result.name).join(', ')}`)
+  const title = done === projects.length ? 'Monstruito: ready' : `Monstruito: ${done} of ${projects.length} ready`
+  return { title, body: lines.join('\n') }
+}
+
+// ——— Cierre del día ———
+
+/** Las etiquetas del cierre de un proyecto: la nota para mañana y lo que queda por guardar o subir. */
+export function describeWrapResult(result: WrapResult): Described[] {
+  const badges: Described[] = []
+  switch (result.note) {
+    case 'saved':
+      badges.push({ text: 'Note saved', tone: 'success', detail: result.next ? `Next: ${result.next}` : undefined })
+      break
+    case 'busy':
+      badges.push({ text: 'Agent busy: no note', tone: 'warning', detail: 'It was working, so it was not interrupted or closed.' })
+      break
+    case 'no-agent':
+      badges.push({ text: 'No agent open', tone: 'neutral' })
+      break
+    case 'timeout':
+      badges.push({ text: 'No note in time', tone: 'warning', detail: 'The agent did not write its note within 3 minutes, so it was left open.' })
+      break
+    case 'failed':
+      badges.push({ text: 'Note failed', tone: 'danger', detail: result.message })
+      break
+    case 'cancelled':
+      badges.push({ text: 'Stopped', tone: 'neutral' })
+      break
+  }
+  if (result.uncommitted) {
+    badges.push({ text: plural(result.uncommitted, 'uncommitted file', 'uncommitted files'), tone: 'warning' })
+  }
+  if (result.untracked) badges.push({ text: plural(result.untracked, 'new file', 'new files'), tone: 'warning' })
+  if (result.unpushed) {
+    badges.push({ text: plural(result.unpushed, 'unpushed commit', 'unpushed commits'), tone: 'warning' })
+  }
+  if (result.uncommitted === 0 && result.untracked === 0 && result.unpushed === 0) {
+    badges.push({ text: 'All committed and pushed', tone: 'success' })
+  }
+  if (result.closed > 0) badges.push({ text: `Closed ${result.closed}`, tone: 'neutral' })
+  if (result.left > 0) {
+    badges.push({ text: `${result.left} left open`, tone: 'neutral', detail: 'Orca only lets Monstruito close what it opened, or what is in the workspace on screen.' })
+  }
+  return badges
+}
+
+const unsaved = (result: WrapResult) => !!(result.uncommitted || result.untracked)
+
+/** Resumen de un cierre: perfil, proyectos y lo que queda por guardar o subir. */
+export function describeWrapSummary(record: WrapRecord): string {
+  const parts = [plural(record.projects.length, 'project', 'projects')]
+  if (record.profile) parts.unshift(record.profile)
+  const dirty = record.projects.filter(unsaved).length
+  const ahead = record.projects.filter((result) => result.unpushed).length
+  if (dirty > 0) parts.push(`${dirty} with uncommitted work`)
+  if (ahead > 0) parts.push(`${ahead} with unpushed commits`)
+  if (dirty === 0 && ahead === 0) parts.push('all saved')
+  if (record.stopped) parts.push('stopped')
+  return parts.join(' · ')
+}
+
+/** Una línea por proyecto, para la barra de estado y el comando. */
+export function describeWrapRun(record: WrapRecord): string {
+  const lines = record.projects.map(
+    (result) => `${result.name}: ${describeWrapResult(result).map((badge) => badge.text).join(' · ')}`
+  )
+  if (record.stopped) lines.push('Stopped before finishing.')
+  return lines.length > 0 ? lines.join('\n') : 'No projects were selected.'
+}
+
+export function statusForWrap(record: WrapRecord): {
+  text: string
+  icon: 'check' | 'warning'
+  tone: 'success' | 'warning'
+  tooltip: string
+} {
+  const pending = record.projects.filter((result) => unsaved(result) || result.unpushed).length
+  return pending > 0 || record.stopped
+    ? { text: `Monstruito: ${plural(pending, 'project', 'projects')} to save`, icon: 'warning', tone: 'warning', tooltip: describeWrapRun(record) }
+    : { text: 'Monstruito: wrapped up', icon: 'check', tone: 'success', tooltip: describeWrapRun(record) }
+}
+
+export function notificationForWrap(record: WrapRecord): { title: string; body: string } {
+  return { title: 'Monstruito: wrapped up', body: describeWrapSummary(record) }
+}
+
 /** Una frase con lo que hará el arranque, para el panel. */
 export function describePlan(settings: GlobalSettings, selected: number, withCommands = 0): string {
   const when = settings.runOnStartup ? 'When Orca opens' : 'When you press Run now'
@@ -331,7 +496,9 @@ export function describePlan(settings: GlobalSettings, selected: number, withCom
     const agent = settings.model
       ? `${agentLabel(settings.agent)} (${modelLabel(settings.agent, settings.model)})`
       : agentLabel(settings.agent)
-    steps.push(settings.onlyWithCommits ? `opens ${agent} where there are new commits` : `opens ${agent}`)
+    const opens =
+      settings.mode === 'brief' ? `opens ${agent} with a brief to get each project ready` : `opens ${agent}`
+    steps.push(settings.onlyWithCommits ? `${opens} where there are new commits` : opens)
   }
   if (settings.runCommands && withCommands > 0) {
     steps.push(`runs the commands of ${plural(withCommands, 'project', 'projects')}`)

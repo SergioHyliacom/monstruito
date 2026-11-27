@@ -2,7 +2,7 @@
 
 export type GitMode = 'pull' | 'fetch' | 'none'
 /** Qué hace el agente en cada proyecto después de git. */
-export type AgentMode = 'wait' | 'summarize' | 'prompt' | 'resume' | 'none'
+export type AgentMode = 'wait' | 'summarize' | 'prompt' | 'resume' | 'brief' | 'none'
 
 /** Lo que se puede cambiar por proyecto. */
 export type ProjectSettings = {
@@ -98,7 +98,10 @@ export type GitOutcome =
   | { kind: 'cancelled' }
 
 export type AgentOutcome =
-  | { kind: 'launched'; agent: string; withPrompt: boolean; model?: string }
+  /** `brief`: se abrió con el brief para dejar el proyecto listo. */
+  | { kind: 'launched'; agent: string; withPrompt: boolean; model?: string; brief?: boolean }
+  /** El agente ya estaba abierto y sin trabajar: se le escribió el brief en su terminal. */
+  | { kind: 'briefed'; agent: string }
   | { kind: 'resumed'; agent: string; title: string }
   | { kind: 'already-open'; agent: string }
   | { kind: 'no-commits' }
@@ -128,6 +131,8 @@ export type ProjectResult = {
   /** Ejecuciones guardadas por la 0.2 y la 0.3, que tenían un solo comando de arranque. */
   startCommand?: StepOutcome | null
   worktrees: WorktreeStatus[]
+  /** Se le mandó al agente el brief para dejarlo listo: desde entonces se espera su resumen. */
+  brief?: { sentAt: number }
 }
 
 export type RunRecord = {
@@ -161,15 +166,71 @@ export type Profile = {
 /** `openAtEnd`: el proyecto marcado usado más recientemente. */
 export const OPEN_RECENT = '__recent'
 
-export type ProgressStep = 'waiting' | 'git' | 'deps' | 'prepare' | 'worktrees' | 'agent' | 'command' | 'web'
+export type ProgressStep =
+  | 'waiting'
+  | 'git'
+  | 'deps'
+  | 'prepare'
+  | 'worktrees'
+  | 'agent'
+  | 'command'
+  | 'web'
+  /** Cierre: esperando la nota del agente. */
+  | 'note'
+  /** Cierre: mirando lo que queda sin commitear o sin subir. */
+  | 'unsaved'
+  /** Cierre: cerrando agentes y pestañas. */
+  | 'closing'
 
-/** Lo que está haciendo ahora una ejecución o una revisión. */
+/** Lo que está haciendo ahora una ejecución, una revisión o un cierre. */
 export type Progress = {
-  kind: 'run' | 'check'
+  kind: 'run' | 'check' | 'wrap'
   total: number
   done: number
   active: { projectId: string; name: string; step: ProgressStep }[]
   stopping: boolean
+}
+
+/** El resumen que el agente deja en `.monstruito/ready.md` al terminar el brief. */
+export type ReadyNote = {
+  /** Cuándo lo escribió (fecha del archivo). */
+  at: number
+  /** La línea «Next: …», sin el «Next:». */
+  next: string | null
+  /** El texto, recortado. */
+  text: string
+}
+
+/** El cierre del día de un proyecto. */
+export type WrapResult = {
+  projectId: string
+  name: string
+  /**
+   * La nota para mañana: `saved` la escribió el agente, `busy` estaba trabajando y no se le
+   * interrumpió, `no-agent` no había ninguno abierto, `timeout` no llegó a tiempo.
+   */
+  note: 'saved' | 'busy' | 'no-agent' | 'timeout' | 'failed' | 'cancelled'
+  /** La línea «Next: …» de la nota. */
+  next?: string | null
+  /** Archivos versionados con cambios sin commitear; null si no es git o falló. */
+  uncommitted: number | null
+  /** Archivos nuevos sin versionar. */
+  untracked: number | null
+  /** Commits locales sin subir; null sin rama remota. */
+  unpushed: number | null
+  /** Agentes y pestañas que se cerraron. */
+  closed: number
+  /** Agentes que se quedaron abiertos (trabajando, o que Orca no deja cerrar). */
+  left: number
+  message?: string
+}
+
+export type WrapRecord = {
+  startedAt: number
+  finishedAt: number
+  profile?: string
+  projects: WrapResult[]
+  stopped?: boolean
 }
 
 /** Lo que se lleva a otro equipo: los proyectos van por ruta y nombre, no por id. */
@@ -241,6 +302,15 @@ export type PanelState = {
    * ejecución o en la revisión), mirado en local sin descargar: si se aplicaron a mano, se ve.
    */
   behindNow: Record<string, number>
+  /** El resumen de cada proyecto al que se mandó el brief en la última ejecución, si ya lo escribió. */
+  ready: Record<string, ReadyNote>
+  /** Comandos que el agente propuso (en `.monstruito/commands.json`) para proyectos sin comandos. */
+  proposed: Record<string, number>
+  /** El último cierre del día. */
+  lastWrap: WrapRecord | null
+  wrapping: boolean
+  /** Primera vez: preguntar si arrancar al abrir Orca o solo a mano. */
+  askStartup: boolean
   profiles: Profile[]
   activeProfileId: string
   /** Los ajustes de todos los perfiles (Settings de Orca). */
@@ -281,8 +351,12 @@ declare module 'orca' {
     'run.start': { output: PanelState }
     /** Empieza una revisión de commits nuevos y responde enseguida. */
     'check.start': { output: PanelState }
-    /** Detiene la ejecución o la revisión en marcha. */
+    /** Detiene la ejecución, la revisión o el cierre en marcha. */
     'run.stop': { output: PanelState }
+    /** Empieza el cierre del día y responde enseguida. */
+    'wrap.start': { output: PanelState }
+    /** La respuesta a «¿arrancar al abrir Orca?» del primer uso. */
+    'startup.answer': { input: { runOnStartup: boolean }; output: PanelState }
     'profile.select': { input: { profileId: string }; output: PanelState }
     /** Crea un perfil (vacío, o copia de otro) y lo deja activo. */
     'profile.create': { input: { name: string; copyFrom?: string }; output: PanelState }
