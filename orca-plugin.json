@@ -2,7 +2,7 @@
   "manifestVersion": 2,
   "id": "monstruito",
   "name": "Monstruito",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Gets the projects you choose ready to work on: pulls git, installs dependencies, opens each one's agent and commands, and can brief the agent to finish the job. Wraps up the day with a note for tomorrow.",
   "icon": "assets/icon.png",
   "cover": {
