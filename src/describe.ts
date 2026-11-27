@@ -73,6 +73,22 @@ export function describeGit(git: GitOutcome): Described {
   }
 }
 
+/**
+ * La etiqueta de git de la última ejecución según cómo está la rama ahora (`behindNow`, mirado en
+ * local): si los commits que quedaron sin aplicar se aplicaron después, a mano, deja de pedirlos.
+ */
+export function describeGitNow(git: GitOutcome, behindNow: number | undefined): Described {
+  if (git.kind !== 'fetched' || behindNow === undefined || behindNow === git.count) return describeGit(git)
+  if (behindNow === 0) {
+    return {
+      text: 'Up to date now',
+      tone: 'success',
+      detail: `The ${plural(git.count, 'commit', 'commits')} this run left unapplied are in your branch now.`
+    }
+  }
+  return describeGit({ ...git, count: behindNow })
+}
+
 /** Los commits locales que no están en la remota, si se contaron y hay alguno. */
 export function describeAhead(git: GitOutcome): Described | null {
   const ahead = 'ahead' in git ? git.ahead : undefined

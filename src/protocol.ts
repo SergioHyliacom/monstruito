@@ -236,6 +236,11 @@ export type PanelState = {
   history: RunRecord[]
   lastRun: RunRecord | null
   pending: PendingCheck | null
+  /**
+   * Cuántos commits va por detrás ahora mismo cada proyecto con commits sin aplicar (en la última
+   * ejecución o en la revisión), mirado en local sin descargar: si se aplicaron a mano, se ve.
+   */
+  behindNow: Record<string, number>
   profiles: Profile[]
   activeProfileId: string
   /** Los ajustes de todos los perfiles (Settings de Orca). */

@@ -756,6 +756,28 @@ test('revisar commits en modo solo descargar no promete que Ejecutar ahora los a
   await worker.deactivate()
 })
 
+test('si los commits sin aplicar se aplican a mano, el panel y la barra lo ven sin descargar', async () => {
+  const repo = fakeRepo({ commits: ['bbb Uno', 'ccc Dos'] })
+  const { host, mount } = setupWorker(repo.git, { settings: { gitMode: 'fetch' } })
+  const worker = await mount()
+  let state = await worker.request('state.get')
+  assert.deepEqual(state.behindNow, { p1: 2 })
+  await worker.command('monstruito.check')
+  assert.equal((host.data().storage.pending as PendingCheck).projects[0].count, 2)
+
+  // La persona hace git pull por su cuenta.
+  await repo.git(PATH, ['merge', '--ff-only', '@{u}'])
+  const fetches = repo.calls.filter((args) => args[0] === 'fetch').length
+  state = await worker.request('state.get')
+  assert.deepEqual(state.behindNow, { p1: 0 })
+  assert.deepEqual(state.pending?.projects, [])
+  assert.deepEqual((host.data().storage.pending as PendingCheck).projects, [])
+  const statuses = host.callsOf('statusBar.update') as { text?: string }[]
+  assert.equal(statuses[statuses.length - 1]?.text, 'Monstruito: up to date')
+  assert.equal(repo.calls.filter((args) => args[0] === 'fetch').length, fetches, 'mirarlo no descarga')
+  await worker.deactivate()
+})
+
 // ——— Panel ———
 
 test('un workspace sin actividad (Orca da 0) cuenta como sin uso', async () => {

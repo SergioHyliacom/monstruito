@@ -29,6 +29,7 @@ function panelState(overrides: Partial<PanelState> = {}): PanelState {
     history: [],
     lastRun: null,
     pending: null,
+    behindNow: {},
     profiles: [PRINCIPAL],
     activeProfileId: 'principal',
     baseSettings: DEFAULT_SETTINGS,
@@ -618,6 +619,38 @@ test('enseña la última ejecución, el historial y los commits sin aplicar', as
   const entry = view.findAll({ type: 'Collapsible' }).find((element) => element.label?.startsWith('Manual'))
   assert.ok(entry, 'la ejecución anterior aparece')
   assert.equal(entry?.props.description, 'Principal · 1 project · 1 with problems · stopped')
+  assert.deepEqual(view.errors, [])
+  await view.unmount()
+})
+
+test('la última ejecución se pliega y dice si sus commits sin aplicar ya se aplicaron', async () => {
+  const fetched = runRecord({
+    results: [
+      {
+        projectId: 'web',
+        name: 'web',
+        path: 'D:/Proyectos/web',
+        git: { kind: 'fetched', upstream: 'origin/main', count: 7, commits: [] },
+        agent: { kind: 'already-open', agent: 'claude' },
+        deps: [],
+        commands: [],
+        worktrees: []
+      }
+    ]
+  })
+  const host = mockHost({
+    requests: { 'state.get': () => panelState({ history: [fetched], lastRun: fetched, behindNow: { web: 0 } }) }
+  })
+  const view = await mount(panel, { host })
+  assert.ok(view.find({ text: 'Up to date now' }))
+  assert.equal(view.find({ text: '7 commits not applied' }), null, 'ya no pide lo que se aplicó a mano')
+  assert.ok(view.find({ text: /The 7 commits this run left unapplied are in your branch now\./ }))
+  assert.equal(view.find({ type: 'Collapsible', label: 'Last run' })?.props.description, 'Principal · 1 project')
+
+  await view.toggle({ type: 'Collapsible', label: 'Last run' })
+  assert.equal(view.find({ text: 'Up to date now' }), null, 'plegada solo queda el resumen')
+  await view.toggle({ type: 'Collapsible', label: 'Last run' })
+  assert.ok(view.find({ text: 'Up to date now' }))
   assert.deepEqual(view.errors, [])
   await view.unmount()
 })

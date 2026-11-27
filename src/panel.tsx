@@ -37,7 +37,7 @@ import { describeWhen, emptyCommand, newCommandId } from './commands'
 import {
   describeAgent,
   describeAhead,
-  describeGit,
+  describeGitNow,
   describeHistoryEntry,
   describePlan,
   describeProgress,
@@ -101,6 +101,8 @@ const settingsScope = atom<'profile' | 'all'>('settingsScope', 'all', { persist:
 /** La pestaña de ajustes elegida, generales y de proyecto. Se recuerda entre usos. */
 const globalTab = atom('globalTab', GLOBAL_GROUPS[0].title, { persist: 'plugin' })
 const projectTab = atom('projectTab', PROJECT_GROUPS[0].title, { persist: 'plugin' })
+/** Si la última ejecución se ve desplegada. Se recuerda entre usos. */
+const lastRunOpen = atom('lastRunOpen', true, { persist: 'plugin' })
 /** Textos de ajustes mientras se escriben, antes de guardarlos, por `ámbito:clave`. */
 const textDrafts = atom<Record<string, string>>({})
 const profileName = atom<string | null>(null)
@@ -1221,10 +1223,11 @@ function ProjectTreeView({ current }: { current: PanelState }) {
 
 // ——— Resultados, avance e historial ———
 
-function ResultRow({ result }: { result: ProjectResult }) {
+/** `behindNow`: solo en la última ejecución, cuántos commits faltan ahora (ver PanelState). */
+function ResultRow({ result, behindNow }: { result: ProjectResult; behindNow?: number }) {
   const ahead = describeAhead(result.git)
   const badges = [
-    describeGit(result.git),
+    describeGitNow(result.git, behindNow),
     ...(ahead ? [ahead] : []),
     describeAgent(result.agent),
     ...result.deps.map(describeStep),
@@ -1257,7 +1260,7 @@ function ResultRow({ result }: { result: ProjectResult }) {
   )
 }
 
-function RunResults({ run }: { run: RunRecord }) {
+function RunResults({ run, behindNow }: { run: RunRecord; behindNow?: Record<string, number> }) {
   return (
     <Stack gap="sm">
       {run.results.length === 0 ? (
@@ -1265,7 +1268,9 @@ function RunResults({ run }: { run: RunRecord }) {
           No projects were selected.
         </Text>
       ) : (
-        run.results.map((result) => <ResultRow key={result.projectId} result={result} />)
+        run.results.map((result) => (
+          <ResultRow key={result.projectId} result={result} behindNow={behindNow?.[result.projectId]} />
+        ))
       )}
       {run.missing.length > 0 ? (
         <Text tone="warning" size="sm">
@@ -1286,17 +1291,25 @@ function RunResults({ run }: { run: RunRecord }) {
   )
 }
 
-function LastRun({ run }: { run: RunRecord }) {
+/** Plegada, la última ejecución deja solo su resumen, para que no se confunda con el estado actual. */
+function LastRun({ run, behindNow }: { run: RunRecord; behindNow: Record<string, number> }) {
   return (
-    <Card title="Last run">
-      <Stack gap="sm">
-        <Text muted size="sm">
-          {run.trigger === 'startup' ? 'When Orca opened' : 'Manual'}
-          {run.profile ? ` · ${run.profile}` : ''}, <RelativeTime at={run.finishedAt} />
-        </Text>
-        <RunResults run={run} />
-      </Stack>
-    </Card>
+    <Box border radius="md" padding="xs" background="card">
+      <Collapsible
+        title="Last run"
+        description={describeHistoryEntry(run).summary}
+        open={read(lastRunOpen)}
+        onChange={(open) => set(lastRunOpen, open)}
+      >
+        <Stack gap="sm">
+          <Text muted size="sm">
+            {run.trigger === 'startup' ? 'When Orca opened' : 'Manual'}
+            {run.profile ? ` · ${run.profile}` : ''}, <RelativeTime at={run.finishedAt} />
+          </Text>
+          <RunResults run={run} behindNow={behindNow} />
+        </Stack>
+      </Collapsible>
+    </Box>
   )
 }
 
@@ -1437,7 +1450,7 @@ export default function Panel() {
       </Row>
       {live ? <ProgressView value={live} /> : null}
       {current.pending ? <PendingView pending={current.pending} /> : null}
-      {current.lastRun ? <LastRun run={current.lastRun} /> : null}
+      {current.lastRun ? <LastRun run={current.lastRun} behindNow={current.behindNow ?? {}} /> : null}
       <HistoryView history={current.history} />
       <Separator />
       <Row gap="xs" align="center">

@@ -13,7 +13,7 @@ import { createModelLauncher, createOrcaCli, createWebOpener, type ModelLauncher
 import { commandsFromLegacy, sanitizeCommandMap, sanitizeCommands } from './commands'
 import { readText as readTextFromDisk, runShell, type Exists, type ReadText, type ShellRunner } from './deps'
 import { describeRun, notificationFor, statusFor, statusForPending } from './describe'
-import { checkIncoming, runGit, type GitRunner } from './git'
+import { behindCount, checkIncoming, runGit, type GitRunner } from './git'
 import { emptyProfile, findProfile, newProfileId, profileForDay, projectToOpen, sanitizeProfiles } from './profiles'
 import { suggestCommands } from './suggest'
 import type {
@@ -182,8 +182,55 @@ export function createActivate(deps: WorkerDeps) {
       }
     }
 
+    /**
+     * Cuántos commits va por detrás ahora cada proyecto que tenía commits sin aplicar, en la última
+     * ejecución o en la revisión. Solo en local (sin descargar), así que es rápido y ve lo que se
+     * aplicó a mano. Durante una ejecución o revisión no se mira: git está ocupado en esos proyectos.
+     */
+    async function currentBehind(
+      lastRun: RunRecord | null,
+      pending: PendingCheck | null,
+      projects: Project[]
+    ): Promise<Record<string, number>> {
+      if (running || checking) return {}
+      const paths = new Map<string, string>()
+      for (const result of lastRun?.results ?? []) {
+        if (result.git.kind === 'fetched') paths.set(result.projectId, result.path)
+      }
+      for (const item of pending?.projects ?? []) {
+        const path = projects.find((project) => project.id === item.projectId)?.path
+        if (path) paths.set(item.projectId, path)
+      }
+      const counts = await Promise.all(
+        [...paths].map(async ([projectId, path]) => {
+          try {
+            return [projectId, await behindCount(deps.git, path)] as const
+          } catch {
+            return [projectId, null] as const
+          }
+        })
+      )
+      return Object.fromEntries(counts.filter((entry): entry is readonly [string, number] => entry[1] !== null))
+    }
+
+    /** La revisión guardada, con lo que ya se aplicó fuera; si cambia, se guarda y se avisa en la barra. */
+    async function refreshPending(pending: PendingCheck | null, now: Record<string, number>): Promise<PendingCheck | null> {
+      if (!pending) return null
+      const projects = pending.projects
+        .map((item) => (item.projectId in now ? { ...item, count: now[item.projectId] } : item))
+        .filter((item) => item.count > 0)
+      const changed =
+        projects.length !== pending.projects.length ||
+        projects.some((item, index) => item.count !== pending.projects[index].count)
+      if (!changed) return pending
+      const next: PendingCheck = { ...pending, projects }
+      await orca.storage.set(PENDING, asJson(next))
+      await setStatus(statusForPending(next))
+      return next
+    }
+
     async function state(): Promise<PanelState> {
-      const [base, active, overrides, history, pending, projects, lastUsed, backup, commands, opened] = await Promise.all([
+      const [base, active, overrides, history, storedPending, projects, lastUsed, backup, commands, opened] = await Promise.all([
         readBase(),
         readActive(),
         readOverrides(),
@@ -195,6 +242,8 @@ export function createActivate(deps: WorkerDeps) {
         readCommands(),
         readOpened()
       ])
+      const behindNow = await currentBehind(history[0] ?? null, storedPending, projects)
+      const pending = await refreshPending(storedPending, behindNow)
       const chosen = new Set(active.profile.selection)
       return {
         baseSettings: base,
@@ -210,6 +259,7 @@ export function createActivate(deps: WorkerDeps) {
         history,
         lastRun: history[0] ?? null,
         pending,
+        behindNow,
         canUndoImport: backup !== null,
         projects: projects.map((project) => ({
           id: project.id,
